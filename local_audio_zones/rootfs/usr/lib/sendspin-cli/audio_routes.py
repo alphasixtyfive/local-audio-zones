@@ -1,0 +1,271 @@
+"""Resolve native sound-device selections into named PulseAudio stereo outputs."""
+
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import subprocess
+import sys
+import tempfile
+
+
+PAIRS = {
+    "front": ("front-left", "front-right"),
+    "rear": ("rear-left", "rear-right"),
+    "side": ("side-left", "side-right"),
+    "center_sub": ("front-center", "lfe"),
+}
+REGISTRY = Path("/run/sendspin-cli/audio-routes.json")
+
+
+class RoutingError(Exception):
+    pass
+
+
+def pactl(*args):
+    environment = dict(os.environ, LC_ALL="C")
+    environment.setdefault("PULSE_SERVER", "unix:/run/audio/pulse.sock")
+    try:
+        result = subprocess.run(
+            ["pactl", *args], env=environment, text=True, capture_output=True,
+            check=True, timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RoutingError("PulseAudio did not accept " + args[0]) from error
+    return result.stdout.rstrip("\n")
+
+
+def device_card(device):
+    try:
+        path = Path(device).resolve(strict=True)
+    except OSError as error:
+        raise RoutingError("Selected sound device is unavailable: " + device) from error
+    match = re.fullmatch(r"/dev/snd/(?:controlC|pcmC)([0-9]+)(?:D[0-9]+p)?", str(path))
+    if not match or not path.is_char_device():
+        raise RoutingError("Select a soundcard control or playback device, not a capture, sequencer or timer device")
+    return int(match[1])
+
+
+def module_arguments(argument):
+    try:
+        return dict(item.split("=", 1) for item in shlex.split(argument) if "=" in item)
+    except ValueError:
+        return {}
+
+
+class AudioRoutes:
+    def __init__(self, pactl=pactl, device_resolver=device_card, registry=REGISTRY):
+        self.pactl = pactl
+        self.device_resolver = device_resolver
+        self.registry = Path(registry)
+
+    def listing(self, kind):
+        if kind == "modules":
+            modules = []
+            indices = set()
+            for line in self.pactl("list", "short", "modules").splitlines():
+                fields = line.split("\t", 3)
+                if len(fields) < 3 or not re.fullmatch(r"[0-9]+", fields[0]) or not fields[1]:
+                    raise RoutingError("Could not read PulseAudio module identities")
+                index = int(fields[0])
+                if index in indices:
+                    raise RoutingError("PulseAudio returned duplicate module identities")
+                indices.add(index)
+                modules.append({"index": index, "name": fields[1], "argument": fields[2]})
+            return modules
+        try:
+            value = json.loads(self.pactl("--format=json", "list", kind))
+        except (ValueError, TypeError) as error:
+            raise RoutingError("Could not read PulseAudio " + kind) from error
+        if not isinstance(value, list):
+            raise RoutingError("Could not read PulseAudio " + kind)
+        return value
+
+    def owned_modules(self):
+        if not self.registry.exists():
+            return []
+        try:
+            records = json.loads(self.registry.read_text())
+            if not isinstance(records, list) or any(
+                not isinstance(item, dict) or set(item) != {"index", "name", "argument"}
+                or type(item["index"]) is not int or item["name"] != "module-remap-sink"
+                or not isinstance(item["argument"], str) for item in records
+            ):
+                raise ValueError
+            return records
+        except (OSError, ValueError) as error:
+            raise RoutingError("Could not read the app's audio-route ownership record") from error
+
+    def record(self, modules):
+        self.registry.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary = tempfile.mkstemp(dir=self.registry.parent, prefix="audio-routes.")
+        try:
+            with os.fdopen(descriptor, "w") as target:
+                json.dump(modules, target)
+            os.replace(temporary, self.registry)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+
+    def cleanup(self):
+        owned = self.owned_modules()
+        if not owned:
+            return
+        remaining = self.remove_owned(owned)
+        self.record(remaining)
+        if remaining:
+            raise RoutingError("Could not unload an app-created audio route")
+
+    def remove_owned(self, owned):
+        remaining = []
+        for position, module in enumerate(owned):
+            try:
+                current = {item["index"]: item for item in self.listing("modules")}
+            except RoutingError:
+                return remaining + owned[position:]
+            found = current.get(module["index"])
+            if found and all(found.get(key) == value for key, value in module.items()):
+                try:
+                    self.pactl("unload-module", str(module["index"]))
+                except RoutingError:
+                    remaining.append(module)
+        return remaining
+
+    def resolve(self, players):
+        if not any("device" in player for player in players):
+            return players
+        cards = self.listing("cards")
+        sinks = self.listing("sinks")
+        modules = self.listing("modules")
+        routes = []
+        selected_pairs = {}
+        for player in players:
+            if "device" not in player:
+                routes.append((player, None, None))
+                continue
+            index = self.device_resolver(player["device"])
+            matching_cards = [card for card in cards
+                              if str(card.get("properties", {}).get("alsa.card", "")) == str(index)]
+            if len(matching_cards) != 1:
+                raise RoutingError(player["name"] + ": selected soundcard has no unique PulseAudio card")
+            card = matching_cards[0]
+            serial = card.get("properties", {}).get("device.serial")
+            if player["device"].startswith("/dev/snd/by-id/") and serial and any(
+                other["index"] != card["index"]
+                and other.get("properties", {}).get("device.serial") == serial for other in cards
+            ):
+                raise RoutingError(player["name"] + ": multiple soundcards share this by-id identity; "
+                                   "select an unambiguous control or playback device and verify the physical mapping")
+            channels = PAIRS[player.get("channel_pair", "front")]
+            masters = [sink for sink in sinks if self.matches_card(sink, card, index)
+                       and set(channels).issubset(self.channels(sink))
+                       and sink.get("properties", {}).get("device.class") != "filter"]
+            if len(masters) != 1:
+                raise RoutingError(player["name"] + ": the active soundcard profile must provide a unique output with "
+                                   + ", ".join(channels) + "; select a suitable profile in Home Assistant's Audio settings")
+            key = (masters[0]["name"], channels)
+            if key in selected_pairs:
+                raise RoutingError(player["name"] + " and " + selected_pairs[key]
+                                   + " select the same soundcard channel pair")
+            selected_pairs[key] = player["name"]
+            routes.append((player, masters[0], channels))
+
+        owned = self.owned_modules()
+        created = []
+        result = []
+        selected_outputs = {player["output"]: player["name"] for player in players if "output" in player}
+        try:
+            for player, master, channels in routes:
+                player = dict(player)
+                if master is not None:
+                    target = self.existing_remap(master, channels, sinks, modules)
+                    output = "pulse:" + (target or "local_audio_zones_" + player["id"])
+                    if output in selected_outputs:
+                        raise RoutingError(player["name"] + " and " + selected_outputs[output]
+                                           + " select the same PulseAudio output")
+                    selected_outputs[output] = player["name"]
+                    if target is None:
+                        target = "local_audio_zones_" + player["id"]
+                        if any(sink["name"] == target for sink in sinks):
+                            raise RoutingError(player["name"] + ": the generated output name is already in use")
+                        if not re.fullmatch(r"[A-Za-z0-9_.:-]+", master["name"]):
+                            raise RoutingError("Unsupported PulseAudio master name")
+                        argument = (
+                            "sink_name=" + target + " master=" + master["name"]
+                            + " channels=2 channel_map=front-left,front-right master_channel_map="
+                            + ",".join(channels) + " remix=no sink_properties=device.description=" + target
+                        )
+                        loaded = self.pactl("load-module", "module-remap-sink", argument)
+                        if not re.fullmatch(r"[0-9]+", loaded):
+                            raise RoutingError("PulseAudio returned an invalid module id")
+                        module = {"index": int(loaded), "name": "module-remap-sink", "argument": argument}
+                        created.append(module)
+                        self.record(owned + created)
+                        modules.append(module)
+                        sinks.append({"name": target, "owner_module": int(loaded), "channel_map": "front-left,front-right"})
+                    player.pop("device")
+                    player.pop("channel_pair")
+                    player["output"] = "pulse:" + target
+                    print(player["name"] + ": using " + player["output"], file=sys.stderr)
+                result.append(player)
+        except Exception:
+            # Roll back only routes made by this attempt; host remaps remain untouched.
+            try:
+                created = self.remove_owned(created) if created else []
+            except RoutingError:
+                pass
+            self.record(owned + created)
+            raise
+        return result
+
+    @staticmethod
+    def matches_card(sink, card, alsa_index):
+        properties = sink.get("properties", {})
+        if "alsa.card" in properties:
+            return str(properties["alsa.card"]) == str(alsa_index)
+        return sink.get("card") == card["index"]
+
+    @staticmethod
+    def channels(sink):
+        channel_map = sink.get("channel_map", "")
+        return channel_map.split(",") if isinstance(channel_map, str) else channel_map
+
+    @staticmethod
+    def existing_remap(master, channels, sinks, modules):
+        matches = []
+        for module in modules:
+            if module.get("name") != "module-remap-sink":
+                continue
+            arguments = module_arguments(module.get("argument", ""))
+            if (arguments.get("master") == master["name"]
+                    and arguments.get("channels") == "2"
+                    and arguments.get("channel_map") == "front-left,front-right"
+                    and arguments.get("master_channel_map") == ",".join(channels)
+                    and arguments.get("remix") == "no"):
+                matches.extend(sink["name"] for sink in sinks
+                               if sink.get("owner_module") == module["index"]
+                               and AudioRoutes.channels(sink) == ["front-left", "front-right"])
+        if len(matches) > 1:
+            raise RoutingError("More than one existing stereo output maps to the selected channel pair")
+        return matches[0] if matches else None
+
+
+def main():
+    try:
+        routes = AudioRoutes()
+        if sys.argv[1:] == ["cleanup"]:
+            routes.cleanup()
+        elif len(sys.argv) == 3 and sys.argv[1] == "resolve":
+            players = json.loads(Path(sys.argv[2]).read_text())
+            print(json.dumps(routes.resolve(players)))
+        else:
+            raise RoutingError("Usage: audio_routes.py resolve PLAYERS_FILE | cleanup")
+    except (RoutingError, OSError, ValueError) as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

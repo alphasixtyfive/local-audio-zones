@@ -7,19 +7,13 @@ source /usr/lib/sendspin-cli/players.sh
 # A player answers even when idle or disconnected from a Music Assistant server.
 ids=$(jq -r '.[].id' "${SENDSPIN_PLAYERS_FILE}")
 while IFS= read -r id; do
+    [ -n "${id}" ] || continue
     sendspin::player_paths "${id}"
     if ! timeout 2 sendspin-cli status --control-socket "${player_control_socket}" > /dev/null; then
         sendspin::log "Player ${id} is not responding on its control socket."
         exit 1
     fi
 done <<< "${ids}"
-
-if [ -n "${SUPERVISOR_TOKEN:-}" ]; then
-    if ! curl -fsS --max-time 2 --unix-socket /run/sendspin-cli/editor.sock http://localhost/health > /dev/null; then
-        sendspin::log "The room editor is not responding."
-        exit 1
-    fi
-fi
 
 decision=$(sendspin::daemon_decision)
 if [ "${decision}" = yes ]; then

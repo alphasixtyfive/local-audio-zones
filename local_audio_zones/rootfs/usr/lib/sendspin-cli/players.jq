@@ -29,23 +29,15 @@ def globals:
     {
         log_level: ($log_level | log_value("log_level")),
         server: ($server | server_value("server")),
-        buffer_ms: ($buffer_ms | text_value("buffer_ms")),
-        audio_format: ($audio_format | text_value("audio_format")),
+        buffer_ms: ($buffer_ms | if . == "" then . else tonumber | buffer_value("buffer_ms") end),
         hook_start: ($hook_start | text_value("hook_start")),
         hook_stop: ($hook_stop | text_value("hook_stop"))
     };
 
-if length != 1 then error("zones must contain exactly one JSON value") else .[0] end
+globals as $settings
+| if length != 1 then error("zones must contain exactly one JSON value") else .[0] end
 | if type != "array" then error("zones must be an array")
 elif length > 32 then error("zones must contain at most 32 players")
-elif length == 0 then
-    [{
-        id: "default",
-        name: ($name | nonempty_text("name")),
-        output: ($output | nonempty_text("output")),
-        port: 8928,
-        client_id: ($client_id | text_value("id"))
-    } + globals]
 else
     to_entries
     | map(
@@ -53,23 +45,34 @@ else
         | .value
         | ("zones[" + ($index | tostring) + "]") as $label
         | if type != "object" then error($label + " must be an object") else . end
-        | if (keys - ["id", "name", "output", "port", "log_level", "server",
+        | if (keys - ["id", "name", "output", "device", "channel_pair", "port", "log_level", "server",
                       "buffer_ms", "hook_start", "hook_stop"] | length) > 0 then
             error($label + " contains an unknown option")
           else . end
         | .id |= nonempty_text($label + ".id")
-        | if .id == "default" then error($label + ".id 'default' is reserved for single-player mode") else . end
         | if (.id | test("^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")) then .
           else error($label + ".id must contain 1 to 64 letters, digits, underscores or hyphens and start with a letter or digit") end
         | .name |= nonempty_text($label + ".name")
-        | .output |= nonempty_text($label + ".output")
+        | if has("device") == has("output") then
+            error($label + " must set exactly one of device or output")
+          elif has("device") then
+            .device |= nonempty_text($label + ".device")
+            | if (.device | test("^/dev/snd/(by-id/[^/]+|controlC[0-9]+|pcmC[0-9]+D[0-9]+p)$")) then .
+              else error($label + ".device must select a soundcard control or playback device") end
+            | .channel_pair = (if has("channel_pair") then .channel_pair else "front" end)
+            | if (.channel_pair | IN("front", "rear", "side", "center_sub")) then .
+              else error($label + ".channel_pair must be front, rear, side or center_sub") end
+          else
+            .output |= nonempty_text($label + ".output")
+            | if has("channel_pair") then error($label + ".channel_pair requires device") else . end
+          end
         | .port = (if has("port") then .port else 8928 + $index end)
         | if (.port | type) != "number" then error($label + ".port must be a number")
           elif .port < 1024 or .port > 65535 or .port != (.port | floor) then
             error($label + ".port must be a whole number between 1024 and 65535")
           else . end
         | if has("buffer_ms") then .buffer_ms |= buffer_value($label + ".buffer_ms") else . end
-        | globals + .
+        | $settings + .
         | .log_level |= log_value($label + ".log_level")
         | .server |= server_value($label + ".server")
         | .hook_start |= text_value($label + ".hook_start")
@@ -78,5 +81,8 @@ else
     )
     | if (map(.id) | unique | length) != length then error("zone ids must be unique")
       elif (map(.port) | unique | length) != length then error("zone ports must be unique")
+      elif ([.[] | select(has("output")) | .output] | unique | length) != ([.[] | select(has("output"))] | length) then
+        (group_by(.output) | map(select(.[0] | has("output")) | select(length > 1)) | .[0]) as $duplicate
+        | error($duplicate[0].name + " and " + $duplicate[1].name + " select the same explicit output")
       else . end
 end

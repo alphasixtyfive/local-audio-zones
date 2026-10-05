@@ -54,10 +54,11 @@ trap 'printf "stopped %s %s\n" "$name" "$$"; exit 0' TERM INT
 while :; do sleep 0.1; done
 PLAYER
 chmod +x "$WORK/player"
+printf '%s\n' '{"zones":[{"id":"study","name":"Study","output":"pulse:study"},{"id":"guest","name":"Guest room","output":"pulse:guest"}]}' > "$WORK/options.json"
 
 docker run -d --name "$CONTAINER" --network none --no-healthcheck \
     --volume "$WORK/player:/usr/bin/sendspin-cli:ro" \
-    --env 'SENDSPIN_ZONES=[{"id":"study","name":"Study","output":"null"},{"id":"guest","name":"Guest room","output":"null"}]' \
+    --volume "$WORK/options.json:/data/options.json:ro" \
     --entrypoint /bin/bash "$IMAGE" -euc '
         mkdir -p /run/sendspin-cli
         printf "no\n" > /run/sendspin-cli/bundled-daemons
@@ -124,7 +125,7 @@ printf '  ok   container shutdown stops both players before the kill deadline\n'
 # This case keeps the image's full init tree: the scanner must not be PID 1.
 docker run -d --name "$SCANNER_CONTAINER" --network none --no-healthcheck \
     --volume "$WORK/player:/usr/bin/sendspin-cli:ro" \
-    --env 'SENDSPIN_ZONES=[{"id":"study","name":"Study","output":"null"},{"id":"guest","name":"Guest room","output":"null"}]' \
+    --volume "$WORK/options.json:/data/options.json:ro" \
     "$IMAGE" > /dev/null
 wait_for_player study '' "$SCANNER_CONTAINER" > /dev/null
 wait_for_player guest '' "$SCANNER_CONTAINER" > /dev/null

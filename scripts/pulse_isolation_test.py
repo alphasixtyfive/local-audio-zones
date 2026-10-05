@@ -5,6 +5,7 @@ Run inside a disposable Linux image containing the built player, pulseaudio,
 pulseaudio-utils and Python. No host audio socket or sound device is used.
 """
 
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -216,6 +217,88 @@ def main():
                 time.sleep(0.05)
             print("  ok   absent named output never routes through the default", flush=True)
 
+        def check_generated_route():
+            source = Path(__file__).resolve().parents[1] / "local_audio_zones/rootfs/usr/lib/sendspin-cli/audio_routes.py"
+            spec = importlib.util.spec_from_file_location("audio_routes", source)
+            routing = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(routing)
+
+            def private_pactl(*arguments):
+                # A null master has no hardware card. Supply that identity only;
+                # module creation, arguments, sink properties and cleanup stay native.
+                if arguments == ("--format=json", "list", "cards"):
+                    return json.dumps([{"index": 41, "properties": {"alsa.card": "7"}}])
+                result = pactl(*arguments)
+                if arguments == ("--format=json", "list", "sinks"):
+                    sinks = json.loads(result)
+                    for sink in sinks:
+                        if sink["name"] == "physical":
+                            sink.pop("card", None)
+                            sink["properties"]["alsa.card"] = "7"
+                            sink["description"] = 'Private "USB" café card'
+                    return json.dumps(sinks)
+                return result.rstrip("\n")
+
+            routes = routing.AudioRoutes(pactl=private_pactl, device_resolver=lambda _: 7,
+                                         registry=work / "owned-routes.json")
+            def master_volume():
+                return next(item["volume"] for item in json.loads(pactl("--format=json", "list", "sinks"))
+                            if item["name"] == "physical")
+
+            original_master_volume = master_volume()
+            player = {"id": "rear", "name": 'Rear "room" café', "device": "/dev/snd/controlC7", "channel_pair": "rear"}
+            try:
+                routes.resolve([player, {**player, "id": "alias", "device": "/dev/snd/by-id/private-usb-card"}])
+            except routing.RoutingError:
+                pass
+            else:
+                raise AssertionError("two device aliases silently shared one physical stereo pair")
+            if "local_audio_zones_rear" in sink_names() or (work / "owned-routes.json").exists():
+                raise AssertionError("duplicate device aliases changed audio routes before rejection")
+            result = routes.resolve([player])
+            if result[0]["output"] != "pulse:local_audio_zones_rear":
+                raise AssertionError("generated route has the wrong output name")
+            sink = next(item for item in json.loads(pactl("--format=json", "list", "sinks"))
+                        if item["name"] == "local_audio_zones_rear")
+            if sink["channel_map"] != "front-left,front-right" or sink["description"] != "local_audio_zones_rear":
+                raise AssertionError("native module rejected stereo mapping or stable output description")
+            if master_volume() != original_master_volume:
+                raise AssertionError("creating a route changed the physical master gain")
+            original = sink["volume"]
+            if routes.resolve([player]) != result:
+                raise AssertionError("second resolution did not reuse the native remap")
+            sink = next(item for item in json.loads(pactl("--format=json", "list", "sinks"))
+                        if item["name"] == "local_audio_zones_rear")
+            if sink["volume"] != original:
+                raise AssertionError("reusing a native route changed its gain")
+            routes.cleanup()
+            if "local_audio_zones_rear" in sink_names() or "physical" not in sink_names():
+                raise AssertionError("cleanup removed the physical master or retained its owned route")
+            if master_volume() != original_master_volume:
+                raise AssertionError("cleanup changed the physical master gain")
+            borrowed = routes.resolve([{**player, "id": "front", "channel_pair": "front"}])
+            if borrowed[0]["output"] != "pulse:study":
+                raise AssertionError("existing host stereo remap was not reused")
+            routes.cleanup()
+            if "study" not in sink_names():
+                raise AssertionError("cleanup removed a borrowed host remap")
+
+            collision = pactl("load-module", "module-null-sink", "sink_name=local_audio_zones_side").strip()
+            try:
+                try:
+                    routes.resolve([player, {**player, "id": "side", "channel_pair": "side"}])
+                except routing.RoutingError:
+                    pass
+                else:
+                    raise AssertionError("creation overwrote a foreign output name")
+                if "local_audio_zones_rear" in sink_names() or not {"physical", "study", "local_audio_zones_side"}.issubset(sink_names()):
+                    raise AssertionError("partial failure removed foreign outputs or retained its own route")
+                if json.loads((work / "owned-routes.json").read_text()) or master_volume() != original_master_volume:
+                    raise AssertionError("rollback retained stale ownership or changed master gain")
+            finally:
+                pactl("unload-module", collision)
+            print("  ok   native PulseAudio accepts generated stereo routes, descriptions, reuse and cleanup", flush=True)
+
         try:
             with pulse_log.open("w") as log:
                 processes.append(subprocess.Popen(
@@ -226,6 +309,7 @@ def main():
             wait_for("private PulseAudio server starts", socket_path.exists, timeout=5)
             master = load_master()
             room = load_room()
+            check_generated_route()
             player_port = free_port()
             config = work / "player.conf"
             config.write_text(
@@ -280,6 +364,11 @@ def main():
                 raise AssertionError("a missing named output silently selected another sink")
             print("  ok   missing named output is rejected without fallback", flush=True)
         except BaseException:
+            for arguments in (("list", "short", "modules"), ("--format=json", "list", "sinks")):
+                try:
+                    print(f"\n--- private pactl {' '.join(arguments)} ---\n{pactl(*arguments)}", flush=True)
+                except (AssertionError, OSError, subprocess.SubprocessError):
+                    pass
             for path in (pulse_log, player_log):
                 if path.exists():
                     print(f"\n--- {path.name} ---\n{path.read_text()}", flush=True)

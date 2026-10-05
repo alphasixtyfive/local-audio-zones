@@ -1,18 +1,9 @@
 name: Build
-
-# Every push to main and every pull request. Nothing here publishes anything -- release.yml owns
-# that, and it is reached only by a tag. A `push` naming only `branches` does not fire for tags
-# at all, which is the whole of how a `v*` push is left to the other workflow. The mirror of that
-# rule is a trap worth naming: a `push` naming only `tags` does not fire for branches, so
-# `tags-ignore: '**'` reads like "everything except tags" and means "nothing at all".
 on:
   push:
     branches:
       - main
   pull_request:
-
-# A superseded push has nothing left to say. This does not collapse the push/PR pair above:
-# those carry different refs and so land in different groups.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -22,48 +13,23 @@ permissions:
 
 defaults:
   run:
-    # Named rather than left to the default, which is `bash -e` with no pipefail.
     shell: bash
 
 jobs:
-  # Both linters are here because this repo's whole release path runs through the shell script.
   lint:
     name: lint
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      # Every third-party action here is pinned to a commit rather than a tag, because a tag can
-      # be repointed at any time and these run with access to the workspace. The trailing comment
-      # is the version that commit was, for whoever bumps it.
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # actionlint's own container rather than an action wrapping it: one fewer third party with
-      # access to the workspace, and the pin is a digest rather than somebody's tag. That digest
-      # is actionlint 1.7.12, recorded here because a `run:` script is invisible to Dependabot.
       - name: Lint the workflows
         run: |
           docker run --rm --volume "$PWD:/repo" --workdir /repo \
             rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
             -color
-
-      # Two invocations, and the split is what keeps this clean without suppressing anything.
-      #
-      # The rootfs scripts are the entry points only -- the shared library they source is not
-      # named here. `-x` with `--source-path=local_audio_zones/rootfs` resolves its absolute `source` path inside
-      # the tree and analyses it in the context that uses it, which is the only context where its
-      # variables are used at all: linting it on its own would report every path it defines as
-      # unused and need an exclusion to say otherwise. `--shell=bash` because s6's
-      # `#!/command/with-contenv bash` is a shebang shellcheck does not know, and the alternative
-      # is a directive in each of five shipped files.
-      #
-      # The second invocation carries `-x` too, because pactl_parse_test.sh sources that same
-      # library to test it, and `SCRIPTDIR` resolves its relative `source` path against the
-      # script rather than the working directory the run happened to start in.
-      #
-      # shellcheck is the runner image's preinstall and floats with it, unlike actionlint above:
-      # GitHub-maintained tooling that fails loud at lint time does not need a digest of its own.
       - name: Lint the shell scripts
+        # Resolve installed absolute sources inside the checked-out rootfs.
         run: |
           shellcheck --shell=bash --external-sources --source-path=local_audio_zones/rootfs \
             local_audio_zones/rootfs/usr/bin/container-healthcheck \
@@ -72,36 +38,15 @@ jobs:
             local_audio_zones/rootfs/etc/s6-overlay/s6-rc.d/*/run \
             local_audio_zones/rootfs/etc/s6-overlay/s6-rc.d/*/finish
           shellcheck -x --source-path=SCRIPTDIR scripts/*.sh
-
-      # Needs no image, so it runs beside the linters rather than behind a build that compiles
-      # the player from source.
       - name: Test the pactl parsing
         run: scripts/pactl_parse_test.sh
 
       - name: Test zone configuration
         run: sudo bash scripts/multi_zone_test.sh
-
-      # Here rather than in the add-on job for the same reason as the one above: it reads a
-      # scratch copy of the manifest and needs nothing but bash and awk.
       - name: Test the security-rating check
         run: scripts/security_rating_test.sh
-
-      # Here for the reason the two above are: they read this repository's own files and need
-      # nothing built. Between them they cover everything release.yml assembles a Release out of,
-      # and release.yml runs only on a tag -- so a pull request that breaks either is caught here
-      # or it is caught by the release.
       - name: Test the release-notes assembly
         run: scripts/release_notes_test.sh
-
-      - name: Test the pinned compose file
-        run: scripts/compose_pinned_test.sh
-
-  # The add-on manifest is what the Home Assistant add-on store reads, and one the Supervisor
-  # rejects is a card that never appears -- a failure with no local symptom at all. This is the
-  # only check anywhere that can see it, so it is worth its own job.
-  #
-  # Nothing here is guarded on local_audio_zones/ existing: a guarded step would go on reporting green
-  # after a rename, and a rename is exactly what is worth catching.
   addon-lint:
     name: add-on manifest
     runs-on: ubuntu-24.04
@@ -109,58 +54,33 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # `community` is left at its default: everything past the linter's build-file section is
-      # gated on that input, and that branch requires the version to be literally `dev` and a
-      # build.json to exist. This app has a release version and pins its bases in
-      # the Dockerfile rather than using community mode's development convention.
       - name: Lint the add-on manifest
         uses: frenck/action-addon-linter@b9cfd1bc62ba60d2c4fc96317b5f7ada5923f4a7 # v2.21.1
         with:
           path: ./local_audio_zones
-
-      # The linter above checks the manifest's schema; this checks its posture. A key that
-      # costs a point of the Supervisor's 1-8 rating has no other symptom -- the add-on
-      # installs, runs and lints exactly as before, and the number only shows on the store card.
       - name: Check the add-on's security rating
         run: scripts/security_rating.sh
-
-      # A no-op on the runner image as it stands. It is here because the check below refuses to
-      # skip when the binary is missing, and going red over an absent package is not the point.
       - name: Make sure apparmor_parser is installed
         run: |
           if ! command -v apparmor_parser >/dev/null; then
             sudo apt-get update
             sudo apt-get install --yes --no-install-recommends apparmor
           fi
-
-      # The profile is worth a point of that rating, but only if it loads, and a typo in it is
-      # invisible everywhere else. Compiled and never handed to the kernel, so this needs no
-      # privilege and changes nothing about the runner.
       - name: Parse the AppArmor profile
         run: scripts/apparmor_check.sh
 
   build:
     name: ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
-    # The build compiles the player from source and then runs the smoke suite twice. Well clear
-    # of that, and far under the six-hour default, so that a container which ignores SIGTERM
-    # fails a leg instead of holding a runner all day.
     timeout-minutes: 60
     strategy:
-      # Every leg's result, not just the first failure's: a break that shows on one architecture
-      # and not the other is what the matrix is here to tell apart.
       fail-fast: false
       matrix:
         include:
-          # Native runners on both legs, so nothing here needs qemu.
           - arch: amd64
             runner: ubuntu-24.04
-            # Explicit overrides must match the Dockerfile's two architecture base stages.
-            # Keep these pins and release.yml on the same Debian release.
+            # Keep architecture base pins aligned with the Dockerfile and release workflow.
             base: ghcr.io/home-assistant/amd64-base-debian@sha256:9281ee991c28532ddae10114ac84750f4aca287a496f6e19583f3a750ad5e786
-            # What `docker image inspect` calls the result, and the third spelling of one thing:
-            # the runner label says `arm`, docker says `arm64`, the add-on manifest `aarch64`.
             expect_arch: amd64
           - arch: aarch64
             runner: ubuntu-24.04-arm
@@ -171,12 +91,6 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      # No assertion on the build output: the Dockerfile greps its own configure log, so a
-      # silently degraded player fails the build there rather than here.
-      #
-      # `docker build` and not buildx, unlike release.yml, which needs buildx to push a digest
-      # without a tag. Nothing is published here, so the plain builder is fewer moving parts.
       - name: Build the image
         env:
           BASE: ${{ matrix.base }}
@@ -192,37 +106,23 @@ jobs:
             echo "::error::built a $arch image on the $EXPECT_ARCH leg -- check BUILD_FROM"
             exit 1
           }
-
-      # The suite's one confined check loads local_audio_zones/apparmor.txt into this runner's kernel
-      # and runs a container under it, which is the only place anything here is ever enforced. A
-      # no-op on the runner image as it stands, as in the add-on job above.
       - name: Make sure apparmor_parser is installed
         run: |
           if ! command -v apparmor_parser >/dev/null; then
             sudo apt-get update
             sudo apt-get install --yes --no-install-recommends apparmor
           fi
-
-      # Twice, because the two option sources share no code above `sendspin::read_options`.
-      # Standalone is what a Compose user gets; add-on is the bashio branch, which nothing else
-      # exercises. The script's own header says what each mode covers.
-      #
-      # `--require-apparmor` because these runners can confine: the confined check is a skip on a
-      # developer's machine and a failure anywhere that could have run it.
-      - name: Smoke test, standalone mode
-        run: scripts/smoke_test.sh "$IMAGE" --mode standalone --require-apparmor
-
-      - name: Smoke test, add-on mode
-        run: scripts/smoke_test.sh "$IMAGE" --mode addon --require-apparmor
+      - name: Smoke test the native app
+        run: scripts/smoke_test.sh "$IMAGE" --require-apparmor
 
       - name: Test independent zone recovery and shutdown
         run: scripts/multi_zone_supervision_test.sh "$IMAGE"
 
-      - name: Test the room editor API
+      - name: Test native device and channel routing
         run: |
           docker run --rm --network none --entrypoint python3 \
             --env PYTHONDONTWRITEBYTECODE=1 --volume "$PWD:/repo:ro" \
-            "$IMAGE" /repo/scripts/config_server_test.py
+            "$IMAGE" /repo/scripts/audio_routing_test.py
 
       - name: Test named PulseAudio output isolation
         run: |

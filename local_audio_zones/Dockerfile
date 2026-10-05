@@ -84,14 +84,13 @@ RUN core_tag="$(sed -n 's/^set(SENDSPIN_GIT_TAG "\([^"]*\)".*/\1/p' CMakeLists.t
     && sha256sum /tmp/pulse-pin-named-output.patch >> /build-info.txt
 
 
-# Debian trixie bases with s6-overlay v3 and bashio. Keep both digests aligned
+# Debian trixie bases with s6-overlay v3. Keep both digests aligned
 # with the CI workflows and the Debian release used by the build stage above.
 FROM ghcr.io/home-assistant/amd64-base-debian@sha256:9281ee991c28532ddae10114ac84750f4aca287a496f6e19583f3a750ad5e786 AS base-amd64
 FROM ghcr.io/home-assistant/aarch64-base-debian@sha256:acc61c0ab60cbca176ec0fe4d37278be514a4a6babfc1becde951c99d17e92f0 AS base-aarch64
 
 FROM ${BUILD_FROM}
 
-ARG SENDSPIN_CLI_REF
 ARG APP_VERSION=0.1.0
 
 LABEL \
@@ -149,28 +148,13 @@ RUN apt-get update \
         libpipewire-0.3-0t64 \
         libstdc++6 \
         pulseaudio-utils \
-        python3-aiohttp \
+        python3 \
     && rm -rf /var/lib/apt/lists/*
 
-# The base image sets this too, but the s6-overlay default is to carry on: the
-# sendspin-init oneshot reports a Supervisor it cannot reach by failing, and
-# that has to stop the container rather than leave the services to flounder.
+# Stop the container if native configuration or startup fails.
 ENV S6_BEHAVIOUR_IF_STAGE2_FAILS=2
 
-# The Supervisor stops an add-on with the grace its `timeout` option asks for and
-# calls a container that overruns it a failure. That option defaults to 10s and
-# config.yaml does not set it, so the shutdown needs a budget it cannot exceed.
-# Raising `timeout` instead would buy silence rather than a clean stop, and the
-# add-on would still be sitting there not shutting down.
-#
-# The three longruns come down in sequence, each bounded by its own
-# `timeout-kill` of 2000ms, and this is what bounds the tail after them: 3 * 2000
-# + 2000 = 8s worst case, measured at 8.2s with all three deliberately wedged.
-#
-# The other two gracetimes s6-overlay documents are deliberately absent. They
-# look relevant and are not: S6_SERVICES_GRACETIME only bounds the v2-style
-# services under /etc/services.d, and S6_KILL_FINISH_MAXTIME only bounds
-# /etc/cont-finish.d scripts. This image ships neither directory.
+# Keep service shutdown and bounded route cleanup within the Supervisor's grace.
 ENV S6_KILL_GRACETIME=2000
 
 COPY --from=build /stage/usr/local/bin/sendspin-cli /usr/bin/sendspin-cli

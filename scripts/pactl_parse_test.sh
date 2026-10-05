@@ -102,87 +102,6 @@ Sink #7
 	Formats:
 		pcm'
 
-readonly PACTL_INFO='Server String: /run/audio/pulse.sock
-Library Protocol Version: 35
-Server Protocol Version: 35
-Is Local: yes
-Client Index: 121
-Tile Size: 65472
-User Name: root
-Host Name: homeassistant
-Server Name: pulseaudio
-Server Version: 17.0
-Default Sample Specification: s16le 2ch 44100Hz
-Default Channel Map: front-left,front-right
-Default Sink: alsa_output.pci-0000_00_1f.3.hdmi-stereo
-Default Source: alsa_output.pci-0000_00_1f.3.hdmi-stereo.monitor
-Cookie: 2966:8795'
-
-# ==============================================================================
-# Which sink gets looked at
-# ==============================================================================
-
-check_client_conf_default_sink() {
-    local conf out
-
-    step 'the sink comes from client.conf'
-
-    # The shape the Supervisor renders, around the commented-out defaults PulseAudio ships.
-    # `;` is PulseAudio's comment character.
-    conf='# Home Assistant audio configuration
-default-server = unix:/run/audio/pulse.sock
-; default-sink = something-else
-default-sink = alsa_output.usb-Topping_D10s-00.analog-stereo
-; default-source =
-autospawn = no'
-    out=$(sendspin::pulse_conf_default_sink <<< "$conf")
-    assert_equal 'alsa_output.usb-Topping_D10s-00.analog-stereo' "$out" \
-        'default-sink is read, and a commented-out one is not'
-
-    conf='default-server = unix:/run/audio/pulse.sock
-; default-sink =
-autospawn = no'
-    out=$(sendspin::pulse_conf_default_sink <<< "$conf")
-    assert_equal '' "$out" 'no default-sink reads as no answer, not as an empty sink name'
-
-    # The key with nothing after it, which is what an unset Audio panel selection renders as.
-    # It has to read as no answer, because that is the whole trigger for the server fallback.
-    conf='default-server = unix:/run/audio/pulse.sock
-default-sink =
-autospawn = no'
-    out=$(sendspin::pulse_conf_default_sink <<< "$conf")
-    assert_equal '' "$out" 'an empty default-sink reads as no answer'
-
-    conf='default-server = unix:/run/audio/pulse.sock
-default-sink =   alsa_output.usb-Topping_D10s-00.analog-stereo   
-autospawn = no'
-    out=$(sendspin::pulse_conf_default_sink <<< "$conf")
-    assert_equal 'alsa_output.usb-Topping_D10s-00.analog-stereo' "$out" \
-        'the sink name comes back without the whitespace around it'
-
-    out=$(sendspin::pulse_conf_default_sink < /dev/null)
-    assert_equal '' "$out" 'an empty client.conf reads as no answer'
-}
-
-check_server_default_sink() {
-    local out
-
-    step 'the server default is the fallback'
-
-    out=$(sendspin::pulse_info_default_sink <<< "$PACTL_INFO")
-    assert_equal 'alsa_output.pci-0000_00_1f.3.hdmi-stereo' "$out" \
-        "the daemon's default sink is read from pactl info"
-
-    # `Default Source:` is the very next line and its name is the sink's plus a suffix, so a
-    # loose match would inspect the monitor source instead.
-    out=$(sendspin::pulse_info_default_sink <<< 'Default Source: alsa_output.hdmi.monitor')
-    assert_equal '' "$out" 'Default Source is not mistaken for Default Sink'
-}
-
-# ==============================================================================
-# Reading a sink's state
-# ==============================================================================
-
 check_sink_state() {
     local out want
 
@@ -574,16 +493,16 @@ check_the_bail_outs() {
 
     out=$(sendspin::report_on_sinks alsa_output.usb-Topping_D10s-00.analog-stereo '' 2>&1)
     case $out in
-        *'PulseAudio lists no audio outputs at all'*) pass 'an empty sink list is reported' ;;
+        *'PulseAudio lists no audio outputs.'*) pass 'an empty sink list is reported' ;;
         *) fail 'an empty sink list is reported'; printf '    got: %q\n' "$out" >&2 ;;
     esac
 
     out=$(sendspin::report_on_sinks alsa_output.usb-gone-00.analog-stereo "$TWO_SINKS" 2>&1)
     case $out in
-        *'alsa_output.usb-gone-00.analog-stereo, is not among the outputs PulseAudio lists.'*)
-            pass 'a default-sink that is not in the list is reported, by name' ;;
+        *'alsa_output.usb-gone-00.analog-stereo is not among the outputs PulseAudio lists.'*)
+            pass 'a configured output that is not in the list is reported, by name' ;;
         *)
-            fail 'a default-sink that is not in the list is reported, by name'
+            fail 'a configured output that is not in the list is reported, by name'
             printf '    got: %q\n' "$out" >&2 ;;
     esac
     case $out in
@@ -642,16 +561,16 @@ check_end_to_end() {
     step 'reading and warning together'
 
     state=$(sendspin::pulse_sink_state \
-        "$(sendspin::pulse_conf_default_sink <<< 'default-sink = alsa_output.usb-Topping_D10s-00.analog-stereo')" \
+        alsa_output.usb-Topping_D10s-00.analog-stereo \
         <<< "$TWO_SINKS")
     mapfile -t field <<< "$state"
     out=$(sendspin::warn_if_sink_is_silent "${field[0]}" "${field[1]}" "${field[2]}" \
         "${field[3]}" "${field[4]}" 2>&1)
     case $out in
         *'ha audio volume output --index 7 --volume 85'*)
-            pass 'the sink client.conf names is the one warned about, with its own index' ;;
+            pass 'the sink the zone selects is the one warned about, with its own index' ;;
         *)
-            fail 'the sink client.conf names is the one warned about, with its own index'
+            fail 'the sink the zone selects is the one warned about, with its own index'
             printf '    got: %q\n' "$out" >&2 ;;
     esac
 
@@ -664,15 +583,13 @@ check_end_to_end() {
     assert_equal 'Playing through sink #7, alsa_output.usb-Topping_D10s-00.analog-stereo (D10s Analog Stereo), at 0%, out of Analog Output (analog-output).' \
         "$out" 'the same sink is the one named on the start line'
 
-    # The same list with the server default selected instead. It resolves to the healthy sink,
-    # so preferring this path over client.conf would warn about nothing while the add-on played
-    # to silence.
+    # The same list with its other named output selected resolves to a healthy sink.
     state=$(sendspin::pulse_sink_state \
-        "$(sendspin::pulse_info_default_sink <<< "$PACTL_INFO")" <<< "$TWO_SINKS")
+        alsa_output.pci-0000_00_1f.3.hdmi-stereo <<< "$TWO_SINKS")
     mapfile -t field <<< "$state"
     out=$(sendspin::warn_if_sink_is_silent "${field[0]}" "${field[1]}" "${field[2]}" \
         "${field[3]}" "${field[4]}" 2>&1)
-    assert_equal '' "$out" 'the server default resolves to the healthy sink and says nothing'
+    assert_equal '' "$out" 'another named output resolves to the healthy sink and says nothing'
 
     # Healthy on level and mute, but its HDMI port is `not available` -- the cable is out, which
     # is exactly the gap the sink warning cannot see.
@@ -690,7 +607,7 @@ check_end_to_end() {
 check_zone_diagnostics() {
     local out
     step 'explicit zone outputs'
-    out=$(sendspin::report_on_sinks ca7_missing "$TWO_SINKS" zone 2>&1)
+    out=$(sendspin::report_on_sinks ca7_missing "$TWO_SINKS" 2>&1)
     case $out in
         *'configured zone output ca7_missing is not among the outputs'*'will not play through the default output.'*)
             pass 'a missing zone output is identified without falling back to another room' ;;
@@ -700,10 +617,10 @@ check_zone_diagnostics() {
         *'Pick one of them'*|*'PulseAudio falls back'*) fail 'zone diagnostics incorrectly recommend the default selector' ;;
         *) pass 'zone diagnostics recommend restoring the configured output' ;;
     esac
-    out=$(sendspin::report_on_sinks ca7_missing '' zone 2>&1)
+    out=$(sendspin::report_on_sinks ca7_missing '' 2>&1)
     assert_equal 'PulseAudio lists no audio outputs. This zone will wait for ca7_missing.' \
         "$out" 'an empty sink list leaves the zone waiting for its own output'
-    out=$(sendspin::report_on_sinks alsa_output.usb-Topping_D10s-00.analog-stereo "$TWO_SINKS" zone 2>&1)
+    out=$(sendspin::report_on_sinks alsa_output.usb-Topping_D10s-00.analog-stereo "$TWO_SINKS" 2>&1)
     case $out in
         *'at 0%'*'ha audio volume output --index 7'*) pass 'zone diagnostics report the selected output and its silent hardware level' ;;
         *) fail 'zone diagnostics report the selected output and its silent hardware level' ;;
@@ -713,8 +630,6 @@ check_zone_diagnostics() {
 main() {
     printf 'pactl parse: checking %s\n' "$SCRIPT_DIR/../local_audio_zones/rootfs/usr/lib/sendspin-cli/common.sh"
 
-    check_client_conf_default_sink
-    check_server_default_sink
     check_sink_state
     check_mute_and_level
     check_garbage_is_no_answer

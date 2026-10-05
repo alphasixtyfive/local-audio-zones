@@ -5,7 +5,7 @@ source /usr/lib/sendspin-cli/common.sh
 source /usr/lib/sendspin-cli/players.sh
 
 sendspin::prepare_players
-sendspin::warn_if_output_changed_meaning
+sendspin::check_output_is_audible || true
 
 # Services are generated from the current options; persistent player state is separate.
 rm -rf "${SENDSPIN_RUN_DIR}/services"
@@ -16,7 +16,12 @@ if [ "${decision}" = yes ]; then
 fi
 
 players=$(jq -c '.[]' "${SENDSPIN_PLAYERS_FILE}")
+mkdir -p "${SENDSPIN_RUN_DIR}/services"
+if [ -z "${players}" ]; then
+    sendspin::log 'No zones configured. Add rooms in the app Configuration tab, save and restart.'
+fi
 while IFS= read -r player; do
+    [ -n "${player}" ] || continue
     id=$(jq -r '.id' <<< "${player}")
     sendspin::player_paths "${id}"
     mkdir -p "${player_run_dir}" "${player_state_dir}"
@@ -29,13 +34,6 @@ while IFS= read -r player; do
         sendspin::log "Advertising \"${name}\" over mDNS, waiting for a Music Assistant server to connect."
     else
         sendspin::log "Resolving the Music Assistant server over mDNS ($(sendspin::redact_server "${server}")); \"${name}\" is not advertised."
-    fi
-
-    if [ "${id}" = default ]; then
-        exec sendspin-cli \
-            --config "${player_conf}" \
-            --state-dir "${player_state_dir}" \
-            --control-socket "${player_control_socket}"
     fi
 
     service_dir="${SENDSPIN_RUN_DIR}/services/${id}"

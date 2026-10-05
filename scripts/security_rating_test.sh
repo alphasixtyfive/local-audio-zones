@@ -75,9 +75,9 @@ assert_rating() {
     got="$(rating_of "$dir")"
     assert_equal "$want" "$got" "$what"
 
-    if [ "$want" = 7 ]; then
+    if [ "$want" = 5 ]; then
         if exits_red "$dir"; then
-            fail "$what -- rated 7 but the check still exited non-zero"
+            fail "$what -- rated 5 but the check still exited non-zero"
         fi
     elif ! exits_red "$dir"; then
         fail "$what -- rated $got but the check exited 0"
@@ -87,12 +87,12 @@ assert_rating() {
 check_the_shipped_manifest() {
     step 'the manifest as it stands'
 
-    assert_rating "$REAL_APP" 7 'local_audio_zones rates 7'
+    assert_rating "$REAL_APP" 5 'local_audio_zones rates 5'
 
     local dir
     dir="$(new_scratch)"
     rm "$dir/apparmor.txt"
-    assert_rating "$dir" 6 'without apparmor.txt the profile point is gone'
+    assert_rating "$dir" 4 'without apparmor.txt the profile point is gone'
 }
 
 check_the_costly_keys() {
@@ -102,7 +102,7 @@ check_the_costly_keys() {
 
     dir="$(new_scratch)"
     printf 'host_pid: true\n' >>"$dir/config.yaml"
-    assert_rating "$dir" 5 'host_pid: true costs two'
+    assert_rating "$dir" 3 'host_pid: true costs two'
 
     # The manifest sets neither half of the pair, so both are added here. With host_uts
     # SYS_ADMIN costs twice, once as a capability and once for the pair; without it only the
@@ -110,27 +110,27 @@ check_the_costly_keys() {
     # half.
     dir="$(new_scratch)"
     printf 'host_uts: true\nprivileged:\n  - SYS_ADMIN\n' >>"$dir/config.yaml"
-    assert_rating "$dir" 5 'SYS_ADMIN alongside host_uts costs two'
+    assert_rating "$dir" 3 'SYS_ADMIN alongside host_uts costs two'
 
     dir="$(new_scratch)"
     printf 'privileged:\n  - SYS_ADMIN\n' >>"$dir/config.yaml"
-    assert_rating "$dir" 6 'SYS_ADMIN without host_uts costs one'
+    assert_rating "$dir" 4 'SYS_ADMIN without host_uts costs one'
 
     dir="$(new_scratch)"
     printf 'apparmor: false\n' >>"$dir/config.yaml"
-    assert_rating "$dir" 5 'apparmor: false turns the +1 into a -1'
+    assert_rating "$dir" 3 'apparmor: false turns the +1 into a -1'
 
     dir="$(new_scratch)"
     printf 'kernel_modules: true\n' >>"$dir/config.yaml"
-    assert_rating "$dir" 6 'kernel_modules: true costs one'
+    assert_rating "$dir" 4 'kernel_modules: true costs one'
 
     dir="$(new_scratch)"
     printf 'hassio_role: manager\n' >>"$dir/config.yaml"
-    assert_rating "$dir" 6 'hassio_role: manager costs one'
+    assert_rating "$dir" 4 'hassio_role: manager costs one'
 
     dir="$(new_scratch)"
     printf 'hassio_role: admin\n' >>"$dir/config.yaml"
-    assert_rating "$dir" 5 'hassio_role: admin costs two'
+    assert_rating "$dir" 3 'hassio_role: admin costs two'
 
     dir="$(new_scratch)"
     printf 'docker_api: true\n' >>"$dir/config.yaml"
@@ -147,20 +147,19 @@ check_the_earning_keys() {
     local dir
 
     dir="$(new_scratch)"
-    sed -i 's/^ingress: true$/ingress: false/' "$dir/config.yaml"
-    assert_rating "$dir" 5 'disabling ingress removes two points'
+    printf 'ingress: true\n' >>"$dir/config.yaml"
+    assert_rating "$dir" 7 'adding ingress earns two points'
 
     dir="$(new_scratch)"
-    sed -i 's/^ingress: true$/ingress: false/' "$dir/config.yaml"
     printf 'auth_api: true\n' >>"$dir/config.yaml"
     assert_rating "$dir" 6 'auth_api without ingress earns one point'
 
     dir="$(new_scratch)"
     sed -i 's/^host_network: true$/host_network: false/' "$dir/config.yaml"
-    assert_rating "$dir" 8 'dropping host_network earns one point'
+    assert_rating "$dir" 6 'dropping host_network earns one point'
 
     dir="$(new_scratch)"
-    printf 'auth_api: true\n' >>"$dir/config.yaml"
+    printf 'ingress: true\nauth_api: true\n' >>"$dir/config.yaml"
     assert_rating "$dir" 7 'ingress and auth_api together still earn only two'
 }
 
@@ -171,15 +170,15 @@ check_the_free_keys() {
 
     dir="$(new_scratch)"
     printf 'privileged:\n  - SYS_NICE\n' >>"$dir/config.yaml"
-    assert_rating "$dir" 7 'a capability outside the costly ten is free'
+    assert_rating "$dir" 5 'a capability outside the costly ten is free'
 
     dir="$(new_scratch)"
     printf 'privileged: [SYS_NICE, SYS_ADMIN]\n' >>"$dir/config.yaml"
-    assert_rating "$dir" 6 'a flow sequence is read the same as a block one'
+    assert_rating "$dir" 4 'a flow sequence is read the same as a block one'
 
     dir="$(new_scratch)"
     printf 'host_ipc: true\nvideo: true\n' >>"$dir/config.yaml"
-    assert_rating "$dir" 7 'keys the rating does not read leave it alone'
+    assert_rating "$dir" 5 'keys the rating does not read leave it alone'
 }
 
 check_nesting_is_not_flattened() {
@@ -190,7 +189,7 @@ check_nesting_is_not_flattened() {
     local dir
     dir="$(new_scratch)"
     printf 'somewhere_nested:\n  host_pid: true\n  full_access: true\n' >>"$dir/config.yaml"
-    assert_rating "$dir" 7 'an indented host_pid is not the host_pid the rating reads'
+    assert_rating "$dir" 5 'an indented host_pid is not the host_pid the rating reads'
 }
 
 check_it_refuses_to_guess() {
@@ -228,17 +227,17 @@ check_comments_and_quotes() {
 
     dir="$(new_scratch)"
     printf 'host_pid: true  # for the profiler\n' >>"$dir/config.yaml"
-    assert_rating "$dir" 5 'an inline comment does not hide the value'
+    assert_rating "$dir" 3 'an inline comment does not hide the value'
 
     dir="$(new_scratch)"
     printf 'hassio_role: "admin"\n' >>"$dir/config.yaml"
-    assert_rating "$dir" 5 'a quoted value is read unquoted'
+    assert_rating "$dir" 3 'a quoted value is read unquoted'
 
     # config.yaml carries prose above every setting, so a reader that matched inside comments
     # would misread the file as it stands.
     dir="$(new_scratch)"
     printf '# host_pid: true\n#full_access: true\n' >>"$dir/config.yaml"
-    assert_rating "$dir" 7 'a commented-out key is not set'
+    assert_rating "$dir" 5 'a commented-out key is not set'
 }
 
 main() {

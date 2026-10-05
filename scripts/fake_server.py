@@ -29,8 +29,7 @@ Every connection is recorded in --marker, one outcome per line, and the smoke su
 what it finds there: a check whose player never connected would otherwise assert the absence
 of a hook's output and pass.
 
-Runs on the host rather than in a container of its own, the way scripts/fake_supervisor.py
-does. It initiates a WebSocket connection to the player's published port: the Sendspin server
+Runs beside the player on localhost and initiates a WebSocket connection: the Sendspin server
 is the WebSocket client, and the player needs no fixed-address server option.
 """
 

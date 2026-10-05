@@ -1,0 +1,370 @@
+#!/usr/bin/env python3
+"""Exercise native device routing with private PulseAudio responses, never host audio."""
+
+import copy
+import importlib.util
+import json
+from pathlib import Path
+import shlex
+import tempfile
+import unittest
+
+
+SOURCE = Path(__file__).resolve().parents[1] / "local_audio_zones/rootfs/usr/lib/sendspin-cli/audio_routes.py"
+SPEC = importlib.util.spec_from_file_location("audio_routes", SOURCE)
+audio_routes = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(audio_routes)
+
+
+class PulseFixture:
+    """The JSON fields and module arguments exposed by pactl, with isolated mutations."""
+
+    def __init__(self):
+        # PulseAudio card indices are deliberately different from ALSA device indices.
+        self.cards = [
+            {"index": 9, "properties": {"alsa.card": "4"}},
+            {"index": 17, "properties": {"alsa.card": "7"}},
+        ]
+        self.sinks = [
+            {"index": 20, "name": "usb_card_a", "owner_module": 1,
+             "description": 'USB "Card A"', "properties": {"device.class": "sound", "alsa.card": "4"},
+             "channel_map": "front-left,front-right,rear-left,rear-right,front-center,lfe,side-left,side-right"},
+            {"index": 21, "name": "usb_card_b", "owner_module": 2,
+             "properties": {"device.class": "sound", "alsa.card": "7"}, "channel_map": "front-left,front-right"},
+            {"index": 22, "name": "unrelated_default", "owner_module": 3,
+             "channel_map": "front-left,front-right"},
+        ]
+        self.modules = []
+        self.calls = []
+        self.next_module = 100
+        self.fail_load = None
+        self.fail_unload = set()
+        self.fail_module_listing = False
+        self.module_text = None
+
+    def __call__(self, *arguments):
+        self.calls.append(arguments)
+        if arguments == ("list", "short", "modules"):
+            if self.fail_module_listing:
+                raise audio_routes.RoutingError("Fixture module listing is unavailable")
+            if self.module_text is not None:
+                return self.module_text
+            return "\n".join(f'{module["index"]}\t{module["name"]}\t{module["argument"]}\t'
+                             for module in self.modules)
+        if arguments[:2] == ("--format=json", "list"):
+            if arguments[2] == "modules":
+                raise AssertionError("Native PA module JSON has no identity field; use the short list")
+            return json.dumps(getattr(self, arguments[2]))
+        if arguments[0] == "load-module":
+            properties = dict(token.split("=", 1) for token in shlex.split(arguments[2]))
+            if properties["sink_name"] == self.fail_load:
+                raise audio_routes.RoutingError("Fixture refuses the requested module")
+            index = self.next_module
+            self.next_module += 1
+            self.modules.append({"index": index, "name": arguments[1], "argument": arguments[2]})
+            self.sinks.append({"name": properties["sink_name"], "owner_module": index,
+                               "channel_map": properties["channel_map"],
+                               "description": properties["sink_properties"].split("=", 1)[1]})
+            return str(index)
+        if arguments[0] == "unload-module":
+            index = int(arguments[1])
+            if index in self.fail_unload:
+                raise audio_routes.RoutingError("Fixture refuses unloading")
+            self.modules = [module for module in self.modules if module["index"] != index]
+            self.sinks = [sink for sink in self.sinks if sink.get("owner_module") != index]
+            return ""
+        raise AssertionError("Unexpected pactl operation: " + repr(arguments))
+
+    def remap(self, name="existing_front", channels="front-left,front-right", remix="no", index=50):
+        argument = (f"sink_name={name} master=usb_card_a channels=2 "
+                    f"channel_map=front-left,front-right master_channel_map={channels} remix={remix}")
+        self.modules.append({"index": index, "name": "module-remap-sink", "argument": argument})
+        self.sinks.append({"name": name, "owner_module": index, "card": 9,
+                           "properties": {"device.class": "filter"},
+                           "channel_map": "front-left,front-right", "volume": {"fixture": "80%"}})
+
+    def mutations(self):
+        return [call for call in self.calls if call[0] in ("load-module", "unload-module")]
+
+
+def room(identifier="study", pair="front", device="/dev/snd/controlC4"):
+    return {"id": identifier, "name": identifier.title(), "device": device,
+            "channel_pair": pair, "client_id": identifier, "port": 8928,
+            "buffer_ms": "250", "hook_start": "", "hook_stop": ""}
+
+
+class RoutingTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="audio-routing-")
+        self.addCleanup(self.temporary.cleanup)
+        self.registry = Path(self.temporary.name) / "owned.json"
+        self.pulse = PulseFixture()
+        devices = {"/dev/snd/controlC4": 4, "/dev/snd/controlC7": 7,
+                   "/dev/snd/by-id/usb-card-a": 4, "/dev/snd/pcmC4D0p": 4}
+        self.routes = audio_routes.AudioRoutes(pactl=self.pulse,
+                                             device_resolver=devices.__getitem__,
+                                             registry=self.registry)
+
+    def test_explicit_outputs_do_not_contact_pulse_or_change_players(self):
+        players = [{"id": "first", "output": "null"}, {"id": "second", "output": "pulse:existing"}]
+        self.assertEqual(self.routes.resolve(players), players)
+        self.assertEqual(self.pulse.calls, [])
+        self.assertFalse(self.registry.exists())
+
+    def test_short_module_list_preserves_empty_arguments_and_quoted_properties(self):
+        argument = 'sink_name=existing_front master=usb_card_a sink_properties=\'device.description="Front café"\''
+        self.pulse.module_text = "0\tmodule-device-restore\t\t\n50\tmodule-remap-sink\t" + argument + "\t"
+        self.assertEqual(self.routes.listing("modules"),
+                         [{"index": 0, "name": "module-device-restore", "argument": ""},
+                          {"index": 50, "name": "module-remap-sink", "argument": argument}])
+
+    def test_malformed_short_modules_fail_before_route_creation(self):
+        malformed = ["bad\tmodule-remap-sink\targument", "1 module-remap-sink argument",
+                     "1\t\targument", "1\tmodule-device-restore",
+                     "1\tmodule-remap-sink\tfirst\n1\tmodule-remap-sink\tsecond"]
+        for text in malformed:
+            with self.subTest(text=text):
+                self.pulse.module_text = text
+                with self.assertRaises(audio_routes.RoutingError):
+                    self.routes.resolve([room()])
+                self.assertEqual(self.pulse.mutations(), [])
+
+    def test_malformed_module_listing_keeps_cleanup_ownership(self):
+        self.routes.resolve([room()])
+        original = self.registry.read_text()
+        self.pulse.module_text = "not a short module record"
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.cleanup()
+        self.assertEqual(self.registry.read_text(), original)
+        self.assertFalse(any(call[0] == "unload-module" for call in self.pulse.calls))
+
+    def test_reuses_existing_stereo_remap_without_changing_gain(self):
+        self.pulse.remap()
+        original = copy.deepcopy(self.pulse.sinks)
+        player = room()
+        result = self.routes.resolve([player])[0]
+        self.assertEqual(result["output"], "pulse:existing_front")
+        self.assertEqual(result["client_id"], "study")
+        self.assertEqual(result["buffer_ms"], "250")
+        self.assertNotIn("device", result)
+        self.assertNotIn("channel_pair", result)
+        self.assertEqual(player, room())
+        self.assertEqual(self.pulse.sinks, original)
+        self.assertEqual(self.pulse.mutations(), [])
+        self.assertFalse(self.registry.exists())
+
+    def test_all_stereo_pairs_map_to_the_selected_card(self):
+        pairs = {"front": "front-left,front-right", "rear": "rear-left,rear-right",
+                 "side": "side-left,side-right", "center_sub": "front-center,lfe"}
+        players = [room(pair, pair) for pair in pairs]
+        results = self.routes.resolve(players)
+        self.assertEqual([player["output"] for player in results],
+                         ["pulse:local_audio_zones_" + pair for pair in pairs])
+        for module, pair in zip(self.pulse.modules, pairs):
+            argument = module["argument"]
+            self.assertIn("master=usb_card_a ", argument)
+            self.assertIn("channels=2 channel_map=front-left,front-right ", argument)
+            self.assertIn("master_channel_map=" + pairs[pair] + " remix=no", argument)
+            self.assertEqual(len(shlex.split(argument)), 7)
+            sink = next(sink for sink in self.pulse.sinks if sink["owner_module"] == module["index"])
+            self.assertEqual(sink["description"], "local_audio_zones_" + pair)
+        self.assertEqual(len(json.loads(self.registry.read_text())), 4)
+
+    def test_second_device_uses_its_own_pulse_card_index(self):
+        self.routes.resolve([room(device="/dev/snd/controlC7")])
+        self.assertIn("master=usb_card_b ", self.pulse.modules[0]["argument"])
+
+    def test_native_pulse_sink_without_card_field_uses_alsa_card_property(self):
+        self.assertNotIn("card", self.pulse.sinks[0])
+        self.routes.resolve([room()])
+        self.assertIn("master=usb_card_a ", self.pulse.modules[0]["argument"])
+
+    def test_pulse_card_field_is_supported_when_alsa_property_is_absent(self):
+        self.pulse.sinks[0]["properties"].pop("alsa.card")
+        self.pulse.sinks[0]["card"] = 9
+        self.routes.resolve([room()])
+        self.assertIn("master=usb_card_a ", self.pulse.modules[0]["argument"])
+
+    def test_conflicting_alsa_property_overrides_a_misleading_card_field(self):
+        self.pulse.sinks[0]["properties"]["alsa.card"] = "7"
+        self.pulse.sinks[0]["card"] = 9
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.resolve([room()])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_unknown_sink_card_identity_never_uses_the_default_output(self):
+        self.pulse.sinks[0]["properties"].pop("alsa.card")
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.resolve([room()])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_duplicate_serial_rejects_a_stable_alias_before_mutation(self):
+        for card in self.pulse.cards:
+            card["properties"]["device.serial"] = "shared-usb-serial"
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.resolve([room(device="/dev/snd/by-id/usb-card-a")])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_duplicate_serial_allows_explicit_current_card_selections(self):
+        for card in self.pulse.cards:
+            card["properties"]["device.serial"] = "shared-usb-serial"
+        result = self.routes.resolve([room(), room("second", device="/dev/snd/controlC7")])
+        self.assertNotEqual(result[0]["output"], result[1]["output"])
+        self.assertIn("master=usb_card_a ", self.pulse.modules[0]["argument"])
+        self.assertIn("master=usb_card_b ", self.pulse.modules[1]["argument"])
+
+    def test_empty_serial_does_not_invent_a_duplicate_identity(self):
+        for card in self.pulse.cards:
+            card["properties"]["device.serial"] = ""
+        self.routes.resolve([room(device="/dev/snd/by-id/usb-card-a")])
+        self.assertIn("master=usb_card_a ", self.pulse.modules[0]["argument"])
+
+    def test_stable_device_alias_and_playback_device_resolve_the_same_card(self):
+        self.pulse.remap()
+        result = self.routes.resolve([room("alias", device="/dev/snd/by-id/usb-card-a"),
+                                      room("playback", pair="rear", device="/dev/snd/pcmC4D0p")])
+        self.assertEqual(result[0]["output"], "pulse:existing_front")
+        self.assertIn("master=usb_card_a ", self.pulse.modules[-1]["argument"])
+
+    def test_duplicate_card_and_pair_aliases_are_rejected_before_creation(self):
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.resolve([room("first"), room("alias", device="/dev/snd/by-id/usb-card-a")])
+        self.assertEqual(self.pulse.mutations(), [])
+        self.assertFalse(self.registry.exists())
+
+    def test_device_route_colliding_with_an_explicit_output_is_rejected(self):
+        self.pulse.remap()
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.resolve([room(), {"id": "other", "name": "Other", "output": "pulse:existing_front"}])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_missing_card_does_not_fall_back_to_an_unrelated_sink(self):
+        self.pulse.cards = []
+        with self.assertRaisesRegex(audio_routes.RoutingError, "no unique PulseAudio card"):
+            self.routes.resolve([room()])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_duplicate_card_identity_is_rejected(self):
+        self.pulse.cards.append({"index": 33, "properties": {"alsa.card": "4"}})
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.resolve([room()])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_unsupported_pair_on_stereo_device_has_an_actionable_error(self):
+        with self.assertRaisesRegex(audio_routes.RoutingError, "Audio settings"):
+            self.routes.resolve([room(pair="rear", device="/dev/snd/controlC7")])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_validates_all_devices_before_creating_any_routes(self):
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.resolve([room(), room("missing", "side", "/dev/snd/controlC7")])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_ambiguous_physical_outputs_are_rejected(self):
+        alternative = dict(self.pulse.sinks[0], name="another_output")
+        self.pulse.sinks.append(alternative)
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.resolve([room()])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_ambiguous_remaps_are_rejected(self):
+        self.pulse.remap()
+        self.pulse.remap("another_front", index=51)
+        with self.assertRaisesRegex(audio_routes.RoutingError, "More than one"):
+            self.routes.resolve([room()])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_remixing_route_is_not_reused(self):
+        self.pulse.remap(remix="yes")
+        result = self.routes.resolve([room()])[0]
+        self.assertEqual(result["output"], "pulse:local_audio_zones_study")
+        self.assertEqual(len(self.pulse.modules), 2)
+
+    def test_conflicting_sink_name_is_not_overwritten(self):
+        self.pulse.sinks.append({"name": "local_audio_zones_study"})
+        with self.assertRaisesRegex(audio_routes.RoutingError, "already in use"):
+            self.routes.resolve([room()])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_failed_creation_rolls_back_only_new_modules(self):
+        self.pulse.remap()
+        self.pulse.fail_load = "local_audio_zones_side"
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.resolve([room("rear", "rear"), room("side", "side")])
+        self.assertEqual([module["index"] for module in self.pulse.modules], [50])
+        self.assertEqual(json.loads(self.registry.read_text()), [])
+
+    def test_cleanup_preserves_host_remaps_and_unloads_only_owned_routes(self):
+        self.pulse.remap()
+        self.routes.resolve([room("rear", "rear")])
+        self.routes.cleanup()
+        self.assertEqual([module["index"] for module in self.pulse.modules], [50])
+        self.assertEqual(json.loads(self.registry.read_text()), [])
+        self.routes.cleanup()
+
+    def test_recycled_module_id_is_not_unloaded(self):
+        self.routes.resolve([room()])
+        self.pulse.modules[0]["argument"] = "sink_name=someone_else"
+        self.routes.cleanup()
+        self.assertEqual(len(self.pulse.modules), 1)
+        self.assertFalse(any(call[0] == "unload-module" for call in self.pulse.calls))
+        self.assertEqual(json.loads(self.registry.read_text()), [])
+
+    def test_failed_cleanup_retains_ownership_for_retry(self):
+        self.routes.resolve([room()])
+        self.pulse.fail_unload = {100}
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.cleanup()
+        self.assertEqual(len(json.loads(self.registry.read_text())), 1)
+        self.pulse.fail_unload.clear()
+        self.routes.cleanup()
+        self.assertEqual(self.pulse.modules, [])
+
+    def test_corrupt_ownership_record_fails_without_unloading_anything(self):
+        self.registry.write_text('[{"index":100}]')
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.cleanup()
+        self.assertEqual(self.pulse.calls, [])
+
+    def test_cleanup_retains_ownership_when_module_listing_is_unavailable(self):
+        self.routes.resolve([room()])
+        original = self.registry.read_text()
+        self.pulse.fail_module_listing = True
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.cleanup()
+        self.assertEqual(self.registry.read_text(), original)
+        self.assertFalse(any(call[0] == "unload-module" for call in self.pulse.calls))
+
+    def test_rollback_checks_ownership_again_after_a_pulse_restart(self):
+        def restart_on_second_load(*arguments):
+            if arguments[0] == "load-module" and "sink_name=local_audio_zones_side " in arguments[2]:
+                self.pulse.modules[0]["argument"] = "sink_name=unrelated_after_restart"
+                raise audio_routes.RoutingError("Fixture restarted during creation")
+            return self.pulse(*arguments)
+
+        self.routes.pactl = restart_on_second_load
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.resolve([room("rear", "rear"), room("side", "side")])
+        self.assertEqual(self.pulse.modules[0]["argument"], "sink_name=unrelated_after_restart")
+        self.assertFalse(any(call[0] == "unload-module" for call in self.pulse.calls))
+        self.assertEqual(json.loads(self.registry.read_text()), [])
+
+    def test_rollback_retains_ownership_when_pulse_stops_answering(self):
+        def fail_after_first_load(*arguments):
+            if arguments[0] == "load-module" and "sink_name=local_audio_zones_side " in arguments[2]:
+                self.pulse.fail_module_listing = True
+                raise audio_routes.RoutingError("Fixture PulseAudio is unavailable")
+            return self.pulse(*arguments)
+
+        self.routes.pactl = fail_after_first_load
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.resolve([room("rear", "rear"), room("side", "side")])
+        self.assertEqual(len(json.loads(self.registry.read_text())), 1)
+        self.assertFalse(any(call[0] == "unload-module" for call in self.pulse.calls))
+        self.pulse.fail_module_listing = False
+        self.routes.cleanup()
+        self.assertEqual(self.pulse.modules, [])
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

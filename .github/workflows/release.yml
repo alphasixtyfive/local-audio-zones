@@ -135,15 +135,10 @@ jobs:
             sudo apt-get install --yes --no-install-recommends apparmor
           fi
 
-      - name: Smoke test, standalone mode
+      - name: Smoke test the native app
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
-        run: scripts/smoke_test.sh "$REPO@$DIGEST" --mode standalone --require-apparmor
-
-      - name: Smoke test, add-on mode
-        env:
-          DIGEST: ${{ steps.push.outputs.digest }}
-        run: scripts/smoke_test.sh "$REPO@$DIGEST" --mode addon --require-apparmor
+        run: scripts/smoke_test.sh "$REPO@$DIGEST" --require-apparmor
 
       - name: Record the digest for the manifest job
         env:
@@ -306,12 +301,6 @@ jobs:
             >"$RUNNER_TEMP/release-notes.md"
           cat "$RUNNER_TEMP/release-notes.md"
 
-      - name: Pin a compose file to the image that was published
-        if: steps.existing.outputs.exists != 'true'
-        run: |
-          scripts/compose_pinned.sh --image "$REPO:$VERSION" >"$RUNNER_TEMP/docker-compose.yml"
-          cat "$RUNNER_TEMP/docker-compose.yml"
-
       - name: Create the release
         if: steps.existing.outputs.exists != 'true'
         env:
@@ -321,5 +310,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "$VERSION" \
-            --notes-file "$RUNNER_TEMP/release-notes.md" \
-            "$RUNNER_TEMP/docker-compose.yml"
+            --notes-file "$RUNNER_TEMP/release-notes.md"
