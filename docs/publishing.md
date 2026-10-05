@@ -1,40 +1,34 @@
-# Publishing Local Audio Zones
+# Publishing
 
-The suggested repository is `alphasixtyfive/local-audio-zones`. Keep the app's
-own name, slug and 0.1.0 version, and retain the existing Git history so the
-upstream origin remains visible. Publish to a separate remote; the current
-`origin` belongs to Music Assistant.
+The app is published at
+[alphasixtyfive/local-audio-zones](https://github.com/alphasixtyfive/local-audio-zones).
+Keep `origin` pointing to Music Assistant and use the separate `community`
+remote for this repository.
 
-The community repository plan is prepared. Before a public release, complete
-the bundled dependency notice review, both architecture checks and a full
-reboot/listening test on the installed hardware. The app remains experimental. No claim of universal
-soundcard compatibility is appropriate.
+Before tagging a version:
 
-Before publishing:
+1. Update the manifest version and changelog together.
+2. Check the licenses and notices for the pinned player and its dependencies.
+3. Push to `main` and wait for all Build jobs, including both architectures.
+4. Test the outputs on real hardware. Include a full reboot when hardware
+   routing or device identity changes.
+5. Push only the new version tag. Do not copy upstream tags to this repository.
 
-1. Inspect the dependencies fetched by the pinned player build, including
-   codec submodules. Retain their required licenses and notices in the source
-   and final image; the player's Apache license does not cover every dependency.
-2. Create the chosen repository and set its default branch to `main`.
-3. Add a separate Git remote and push the reviewed branch to `main`.
-4. Add root `repository.yaml` with the repository name, URL and maintainer;
-   set the app manifest's `url` to the same verified repository URL.
-5. Run both architecture jobs. Tag `v0.1.0` only after they pass. The existing
-   release workflow publishes architecture images and a multi-architecture
-   manifest to `ghcr.io/<owner>/<repository>:0.1.0`.
-6. Make the GHCR package public, then set the app manifest's `image` to the
-   generic GHCR name. Verify a clean installation from the repository URL.
+The Release workflow publishes both architectures and their shared manifest
+at `ghcr.io/alphasixtyfive/local-audio-zones:<version>`. Check that the package
+is public and can be pulled anonymously before referencing it in the app's
+`image` setting. Test installation from the repository URL.
 
-Keep `LICENSE`, `NOTICE`, `HASSCONNECT-LICENSE`, upstream notices, modification
-notices and the patch explanation with the source and image. The app guide
-credits Music Assistant Local Audio, PR 34 and the pinned Sendspin player.
-Household device paths, credentials, state snapshots and work-directory
-diagnostics do not belong in the published repository.
+Version 0.1.0 is experimental. Keep hardware and recovery limits in the
+[hardware guide](audio-hardware-support.md).
 
-The editable artwork is `local_audio_zones/icon.svg`; `icon.png` and `logo.png`
-are transparent PNG exports at 128 and 256 pixels. They reuse HASSConnect's
-cyan/white palette with a different interior symbol.
+Retain upstream history, licenses and [NOTICE](../local_audio_zones/NOTICE).
+Keep household configuration, credentials, state and diagnostic logs outside
+this repository.
 
-Sources: [Home Assistant repositories](https://developers.home-assistant.io/docs/apps/repository/),
-[publishing images](https://developers.home-assistant.io/docs/apps/publishing/),
-[icons and logos](https://developers.home-assistant.io/docs/apps/presentation/).
+The editable icon is `local_audio_zones/icon.svg`; PNG exports are 128 and
+256 pixels.
+
+See Home Assistant's [repository](https://developers.home-assistant.io/docs/apps/repository/)
+and [publishing](https://developers.home-assistant.io/docs/apps/publishing/)
+guides.

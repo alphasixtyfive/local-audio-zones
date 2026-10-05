@@ -1,81 +1,54 @@
 # Local Audio Zones
 
-Turn local soundcard outputs into rooms in Music Assistant. Select a soundcard
-and stereo output for each room in Home Assistant, then control playback,
-volume and groups in Music Assistant.
+<img src="local_audio_zones/icon.svg" width="96" height="96" alt="Local Audio Zones">
+
+Turn soundcard outputs into separate rooms in Music Assistant. Choose a card
+and a stereo pair for each room in Home Assistant's app settings. Music
+Assistant handles playback, volume and groups.
 
 ## Install
 
-1. Copy `local_audio_zones/` to `/addons/local_audio_zones/` on Home Assistant OS.
-2. In **Settings / Apps / App store**, check for updates and install **Local
-   Audio Zones**.
-3. In the app's **Configuration** tab, add rooms with stable IDs and names.
-   Select each detected sound device and stereo pair, then save and restart.
+[Add to Home Assistant](https://my.home-assistant.io/redirect/supervisor_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2Falphasixtyfive%2Flocal-audio-zones)
 
-See the [app guide](local_audio_zones/README.md) for the native controls and
-[output routing](docs/pulseaudio-zones.md) and
-[hardware support](docs/audio-hardware-support.md) for hardware requirements.
+1. Add `https://github.com/alphasixtyfive/local-audio-zones` under
+   **Settings / Apps / App store / Repositories**.
+2. Install **Local Audio Zones**.
+3. Add your rooms in **Configuration**, save, then restart the app.
+
 Music Assistant and the app need working mDNS on the same local network.
+Version 0.1.0 is experimental.
 
-See [publishing](docs/publishing.md) for the community repository and image plan.
+## Configuration
 
-## Room settings
+Select a detected soundcard and an output pair for each room. Custom channel
+pairs and existing stereo outputs are also supported. Keep each room's player
+ID when renaming it.
 
-Choose a `/dev/snd/by-id/` soundcard when available and Front left/right, Rear left/right,
-Side left/right or Centre/Subwoofer. For other layouts, leave Output pair unset
-and enter two distinct names in Custom channels, such as `aux0,aux1`. The Log
-tab reports the card's actual available channels. For identical cards, enter
-`/dev/snd/by-path/` device links through **Configuration / Edit in YAML**; the
-native picker does not offer those aliases. Existing stereo remaps are reused;
-otherwise the app
-creates a standard PulseAudio remap with `remix=no`. It does not change card
-profiles, sample rates or hardware volume. An explicit output such as
-`pulse:my_stereo_sink` is also supported instead of a sound-device selection.
+The app checks channel availability and conflicts before starting. It leaves
+hardware profiles, sample rates and output levels alone.
 
-| Setting | Behavior |
-| --- | --- |
-| Player ID | 1–64 letters, digits, underscores or hyphens; begins with a letter or digit. Keep it when renaming a room. |
-| Port | Unique port from 1024–65535; defaults to 8928 plus room position. |
-| Log level | `debug`, `info`, `warning` or `error`. |
-| Server | Empty for player discovery, `mdns:` for any server, or `mdns:<name>` for a named server. |
-| Audio buffer | Whole number from 10–2000 ms; leave inherited unless needed. |
-| Playback commands | Native start/stop shell commands, run inside the app without blocking playback. |
-
-Up to 32 rooms are supported. Log level, server, buffer and commands inherit the
-app settings unless overridden. An explicit empty server or command clears its
-inherited value. Invalid IDs, duplicate ports, unsupported or overlapping channels and ambiguous
-card mappings are rejected before players start. No rooms means the app waits
-for configuration without advertising an extra player.
-
-Saving native settings stores them; restarting applies them. The Log tab reports
-selected outputs and startup errors. Health checks verify player control sockets;
-they cannot verify wiring or sound quality. Keep Music Assistant's minimum volume
-at zero for silence at zero and calibrate maximum loudness at the amplifier or
-host output.
+See the [app guide](local_audio_zones/README.md),
+[hardware requirements](docs/audio-hardware-support.md) and
+[routing guide](docs/pulseaudio-zones.md) for details and current limits.
 
 ## Development
-
-The self-contained app lives in `local_audio_zones/`. Build it with:
 
 ```sh
 docker build -t local-audio-zones local_audio_zones
 scripts/smoke_test.sh local-audio-zones
 ```
 
-CI checks configuration, supervision, PulseAudio routing and AppArmor on amd64
-and aarch64.
+CI checks configuration, supervision, routing and AppArmor on amd64 and aarch64.
+For local testing on Home Assistant OS, copy `local_audio_zones/` to
+`/addons/local_audio_zones/` and reload the app store.
 
 ## Credits
 
-Packaging is based on [Music Assistant Local Audio](https://github.com/music-assistant/local-audio-addon)
-and its [native-player update in PR #34](https://github.com/music-assistant/local-audio-addon/pull/34).
-The player is [sendspin-cli v0.2.0](https://github.com/Sendspin/sendspin-cpp-cli),
-pinned to `e980128a9c37229cbc28c764e9f2fd65d1c5edb6`. One
-[documented patch](local_audio_zones/patches/README.md) uses PulseAudio's standard
-`PA_STREAM_DONT_MOVE` flag to keep named room outputs from moving to another
-sink after device loss. Upstream notices and the Apache-2.0 [license](LICENSE)
-are retained.
+Based on [Music Assistant Local Audio](https://github.com/music-assistant/local-audio-addon)
+and its [native-player update](https://github.com/music-assistant/local-audio-addon/pull/34).
+Playback uses [Sendspin](https://github.com/Sendspin/sendspin-cpp-cli), with a
+[small routing patch](local_audio_zones/patches/README.md). The icon adapts
+[HASSConnect](https://github.com/alphasixtyfive/HASSConnect)'s house artwork.
 
-The logo adapts [HASSConnect](https://github.com/alphasixtyfive/HASSConnect)'s
-house artwork. See [NOTICE](local_audio_zones/NOTICE) for origins and licenses.
-This is an independently maintained community app.
+This is an independent community app. Upstream licenses and notices are
+retained in [LICENSE](LICENSE) and [NOTICE](local_audio_zones/NOTICE).

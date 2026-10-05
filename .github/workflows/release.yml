@@ -307,4 +307,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "$VERSION" \
+            --prerelease \
             --notes-file "$RUNNER_TEMP/release-notes.md"

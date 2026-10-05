@@ -2,6 +2,7 @@
 name: Local Audio Zones
 version: "0.1.0"
 slug: local_audio_zones
+url: https://github.com/alphasixtyfive/local-audio-zones
 description: Turn soundcard outputs into separate Music Assistant rooms.
 arch:
   - amd64
