@@ -21,8 +21,10 @@ can have ambiguous identities; verify mappings after a full reboot and when
 adding another card. A USB port assignment by itself does not guarantee a stable
 PulseAudio or ALSA identity.
 The app rejects a by-id selection when multiple PulseAudio cards report the same
-nonempty serial. Explicit control or playback paths remain available, with the
-same requirement to verify their physical mapping after a restart.
+nonempty serial. Set separate `/dev/snd/by-path/` links through **Configuration /
+Edit in YAML** for cards on fixed physical ports; the native picker does not
+offer those aliases. Explicit control/playback paths remain available, but
+numeric card order can change. Verify physical mappings after a full reboot.
 
 The app preserves existing output levels, including levels on reused remaps.
 Calibrate fixed hardware levels separately from everyday Music Assistant volume.

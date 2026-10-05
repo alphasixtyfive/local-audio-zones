@@ -5,21 +5,24 @@ own name, slug and 0.1.0 version, and retain the existing Git history so the
 upstream origin remains visible. Publish to a separate remote; the current
 `origin` belongs to Music Assistant.
 
-The source is ready for a community repository, but a public release should
-wait for the final Linux runtime checks and a full reboot/listening test on
-the installed hardware. The app remains experimental. No claim of universal
+The community repository plan is prepared. Before a public release, complete
+the bundled dependency notice review, both architecture checks and a full
+reboot/listening test on the installed hardware. The app remains experimental. No claim of universal
 soundcard compatibility is appropriate.
 
 Before publishing:
 
-1. Create the chosen repository and set its default branch to `main`.
-2. Add a separate Git remote and push the reviewed branch to `main`.
-3. Add root `repository.yaml` with the repository name, URL and maintainer;
+1. Inspect the dependencies fetched by the pinned player build, including
+   codec submodules. Retain their required licenses and notices in the source
+   and final image; the player's Apache license does not cover every dependency.
+2. Create the chosen repository and set its default branch to `main`.
+3. Add a separate Git remote and push the reviewed branch to `main`.
+4. Add root `repository.yaml` with the repository name, URL and maintainer;
    set the app manifest's `url` to the same verified repository URL.
-4. Run both architecture jobs. Tag `v0.1.0` only after they pass. The existing
+5. Run both architecture jobs. Tag `v0.1.0` only after they pass. The existing
    release workflow publishes architecture images and a multi-architecture
    manifest to `ghcr.io/<owner>/<repository>:0.1.0`.
-5. Make the GHCR package public, then set the app manifest's `image` to the
+6. Make the GHCR package public, then set the app manifest's `image` to the
    generic GHCR name. Verify a clean installation from the repository URL.
 
 Keep `LICENSE`, `NOTICE`, `HASSCONNECT-LICENSE`, upstream notices, modification

@@ -9,8 +9,10 @@ profile and exposed channel map, not the advertised number of sockets.
 
 The native Home Assistant picker detects sound devices. Prefer `/dev/snd/by-id/`
 for a unique device identity. For identical cards with the same serial, use
-separate `/dev/snd/by-path/` links and keep their physical USB ports unchanged.
-Those links are standard [systemd ALSA device rules](https://github.com/systemd/systemd/blob/main/rules.d/60-persistent-alsa.rules).
+**Configuration / Edit in YAML** to enter separate `/dev/snd/by-path/` links
+in each room's `device`. Keep their physical USB ports unchanged. The native
+picker offers by-id or numeric device paths, not by-path aliases; those aliases
+are nevertheless accepted by native configuration. These are standard [systemd ALSA device rules](https://github.com/systemd/systemd/blob/main/rules.d/60-persistent-alsa.rules).
 Changing a VM's USB topology can change the guest path; verify each room after
 a full reboot. Numeric control/playback nodes are supported but their card
 numbers can change.
@@ -59,6 +61,10 @@ changing the host routing.
 
 ## Recovery and verification
 
+Process health does not prove that an audio device is available. A responsive
+player with a missing output must not trigger a global watchdog restart that
+interrupts rooms on other cards.
+
 An unplugged device cannot be replaced by a different room's default output.
 Native recovery is bounded for the current stream; a new stream or app restart
 may be necessary after repeated interruptions. Remaps must exist again when
@@ -75,3 +81,21 @@ and [multichannel format restrictions](https://github.com/music-assistant/local-
 The latter concerns a multichannel player stream; this app instead gives each
 stereo room its own player. Keep these different requirements separate when
 reporting hardware results upstream.
+
+## Further improvements
+
+Keep device identity, playback endpoint and channel selection separate. ALSA
+`hw:CARD=...,DEV=...` selects a PCM endpoint; it does not select its left/right
+channels. PulseAudio's named positions describe channels on that endpoint,
+including `aux` positions for layouts without surround labels. Replacing these
+names with fixed socket numbers would assume an ordering the app cannot know.
+
+The next routing improvement is to honor the PCM device number when a playback
+node is selected, using the sink's reported `alsa.device` property. Until then,
+use an explicitly named stereo output for a card with multiple active PCMs.
+Improve ambiguous-output errors by listing candidates rather than guessing.
+
+Recovery should restore only affected room routes when hardware returns. Keep
+that separate from process supervision and preserve rooms on connected cards.
+Verify two identical cards, multiple PCM endpoints and unplug/replug behavior
+before advertising automatic recovery or broader hardware support.

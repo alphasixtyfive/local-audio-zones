@@ -24,7 +24,10 @@ See [publishing](docs/publishing.md) for the community repository and image plan
 Choose a `/dev/snd/by-id/` soundcard when available and Front left/right, Rear left/right,
 Side left/right or Centre/Subwoofer. For other layouts, leave Output pair unset
 and enter two distinct names in Custom channels, such as `aux0,aux1`. The Log
-tab reports the card's actual available channels. Existing stereo remaps are reused; otherwise the app
+tab reports the card's actual available channels. For identical cards, enter
+`/dev/snd/by-path/` device links through **Configuration / Edit in YAML**; the
+native picker does not offer those aliases. Existing stereo remaps are reused;
+otherwise the app
 creates a standard PulseAudio remap with `remix=no`. It does not change card
 profiles, sample rates or hardware volume. An explicit output such as
 `pulse:my_stereo_sink` is also supported instead of a sound-device selection.

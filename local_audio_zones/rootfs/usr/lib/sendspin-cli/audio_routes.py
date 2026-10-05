@@ -180,6 +180,7 @@ class AudioRoutes:
 
         module_by_index = {module["index"]: module for module in modules}
         sink_by_name = {sink["name"]: sink for sink in sinks}
+        device_masters = {master["name"] for _, master, _ in routes if master is not None}
         for player, master, _ in routes:
             output = player.get("output", "")
             if master is not None or not output.startswith("pulse:"):
@@ -190,6 +191,9 @@ class AudioRoutes:
             module = module_by_index.get(sink.get("owner_module"), {})
             if module.get("name") == "module-remap-sink":
                 arguments = module_arguments(module["argument"])
+                if arguments.get("master") in device_masters and arguments.get("remix") != "no":
+                    raise RoutingError(player["name"] + ": this explicit remap can mix into other rooms; "
+                                       "use a remap with remix=no or select its soundcard and channels")
                 source_channels = arguments.get("master_channel_map", "").split(",")
                 if arguments.get("master") and all(source_channels):
                     reserve_channels(arguments["master"], source_channels, player["name"])

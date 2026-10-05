@@ -260,6 +260,35 @@ class RoutingTests(unittest.TestCase):
         self.routes.cleanup()
         self.assertEqual([module["index"] for module in self.pulse.modules], [50])
 
+    def test_explicit_remixing_routes_cannot_share_a_device_selected_master(self):
+        explicit = {"id": "expert", "name": "Expert", "output": "pulse:expert_route"}
+        for remix in ("yes", None):
+            with self.subTest(remix=remix):
+                self.pulse.modules.clear()
+                self.pulse.sinks = self.pulse.sinks[:3]
+                self.pulse.remap("expert_route", channels="rear-left,rear-right", remix="yes")
+                if remix is None:
+                    self.pulse.modules[0]["argument"] = self.pulse.modules[0]["argument"].replace(" remix=yes", "")
+                for players in ([room(), explicit], [explicit, room()]):
+                    with self.assertRaisesRegex(audio_routes.RoutingError, "remix=no"):
+                        self.routes.resolve(players)
+                    self.assertEqual(self.pulse.mutations(), [])
+
+    def test_explicit_remixing_route_on_another_master_is_unchanged(self):
+        self.pulse.remap("expert_route", remix="yes")
+        self.pulse.modules[0]["argument"] = self.pulse.modules[0]["argument"].replace("master=usb_card_a", "master=usb_card_b")
+        explicit = {"id": "expert", "name": "Expert", "output": "pulse:expert_route"}
+        result = self.routes.resolve([room(), explicit])
+        self.assertEqual(result[1], explicit)
+        self.routes.cleanup()
+        self.assertEqual([module["index"] for module in self.pulse.modules], [50])
+
+    def test_explicit_only_remixing_route_stays_an_expert_configuration(self):
+        self.pulse.remap("expert_route", remix="yes")
+        players = [{"id": "expert", "name": "Expert", "output": "pulse:expert_route"}]
+        self.assertEqual(self.routes.resolve(players), players)
+        self.assertEqual(self.pulse.calls, [])
+
     def test_explicit_physical_master_cannot_overlap_a_selected_device(self):
         explicit = {"id": "expert", "name": "Expert", "output": "pulse:usb_card_a"}
         with self.assertRaises(audio_routes.RoutingError):

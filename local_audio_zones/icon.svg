@@ -2,19 +2,19 @@
   <title>Local Audio Zones</title>
   <path d="M109 32Q128 16 147 32L220 94Q234 106 234 125V200Q234 232 202 232H54Q22 232 22 200V125Q22 106 36 94Z" fill="#18BCF2"/>
   <g fill="#fff">
-    <rect x="69" y="79" width="46" height="52" rx="8"/>
-    <rect x="141" y="79" width="46" height="52" rx="8"/>
-    <rect x="69" y="147" width="46" height="52" rx="8"/>
-    <rect x="141" y="147" width="46" height="52" rx="8"/>
+    <rect x="71" y="89" width="42" height="48" rx="8"/>
+    <rect x="143" y="89" width="42" height="48" rx="8"/>
+    <rect x="71" y="157" width="42" height="48" rx="8"/>
+    <rect x="143" y="157" width="42" height="48" rx="8"/>
   </g>
   <g fill="#18BCF2">
-    <circle cx="92" cy="93" r="4"/>
-    <circle cx="164" cy="93" r="4"/>
-    <circle cx="92" cy="161" r="4"/>
-    <circle cx="164" cy="161" r="4"/>
-    <circle cx="92" cy="113" r="10"/>
-    <circle cx="164" cy="113" r="10"/>
-    <circle cx="92" cy="181" r="10"/>
-    <circle cx="164" cy="181" r="10"/>
+    <circle cx="92" cy="101" r="3.5"/>
+    <circle cx="164" cy="101" r="3.5"/>
+    <circle cx="92" cy="169" r="3.5"/>
+    <circle cx="164" cy="169" r="3.5"/>
+    <circle cx="92" cy="121" r="9"/>
+    <circle cx="164" cy="121" r="9"/>
+    <circle cx="92" cy="189" r="9"/>
+    <circle cx="164" cy="189" r="9"/>
   </g>
 </svg>

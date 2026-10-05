@@ -14,10 +14,11 @@ Each selected pair must exist in the card's
 active audio profile. The Log tab explains invalid selections and names the
 resolved PulseAudio output.
 
-If identical cards share a by-id identity, prefer their separate
-`/dev/snd/by-path/` links and keep them on fixed physical ports. Otherwise select
-an unambiguous control or playback device and verify its physical output after
-each restart.
+For identical cards sharing a by-id identity, use **Configuration / Edit in
+YAML** to set each room's `device` to its separate `/dev/snd/by-path/` link.
+These links are accepted but are not offered by the native picker. Keep the
+cards on fixed physical ports and verify their outputs after a full reboot.
+Numeric control/playback selections can change when card order changes.
 
 | Pair | Channels |
 | --- | --- |
