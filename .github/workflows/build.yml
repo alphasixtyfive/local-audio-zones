@@ -91,6 +91,13 @@ jobs:
       - name: Build the image
         run: docker build --build-arg "BUILD_ARCH=${{ matrix.arch }}" --tag "$IMAGE" local_audio_zones
 
+      - name: Check dependency notices in the image
+        run: |
+          (cd local_audio_zones/licenses && sha256sum -- *) > notices.sha256
+          docker run --rm --network none --entrypoint bash \
+            --volume "$PWD/notices.sha256:/tmp/notices.sha256:ro" "$IMAGE" \
+            -ec 'cd /usr/share/doc/local-audio-zones/licenses; sha256sum --check /tmp/notices.sha256'
+
       - name: Check the image is the architecture this leg builds for
         env:
           EXPECT_ARCH: ${{ matrix.expect_arch }}

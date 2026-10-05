@@ -82,6 +82,7 @@ FROM base-${BUILD_ARCH}
 ARG APP_VERSION=0.1.0
 
 LABEL \
+    org.opencontainers.image.source="https://github.com/alphasixtyfive/local-audio-zones" \
     org.opencontainers.image.version="${APP_VERSION}" \
     org.opencontainers.image.licenses="Apache-2.0"
 
