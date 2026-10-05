@@ -1,0 +1,48 @@
+#!/command/with-contenv bash
+set -euo pipefail
+
+source /usr/lib/sendspin-cli/common.sh
+source /usr/lib/sendspin-cli/players.sh
+
+sendspin::prepare_players
+sendspin::warn_if_output_changed_meaning
+
+# Services are generated from the current options; persistent player state is separate.
+rm -rf "${SENDSPIN_RUN_DIR}/services"
+
+decision=$(sendspin::daemon_decision)
+if [ "${decision}" = yes ]; then
+    sendspin::wait_for_socket "${AVAHI_SOCKET}"
+fi
+
+players=$(jq -c '.[]' "${SENDSPIN_PLAYERS_FILE}")
+while IFS= read -r player; do
+    id=$(jq -r '.id' <<< "${player}")
+    sendspin::player_paths "${id}"
+    mkdir -p "${player_run_dir}" "${player_state_dir}"
+    install -m 600 /dev/null "${player_conf}"
+    sendspin::render_player "${player}" > "${player_conf}"
+
+    name=$(jq -r '.name' <<< "${player}")
+    server=$(jq -r '.server' <<< "${player}")
+    if [ -z "${server}" ]; then
+        sendspin::log "Advertising \"${name}\" over mDNS, waiting for a Music Assistant server to connect."
+    else
+        sendspin::log "Resolving the Music Assistant server over mDNS ($(sendspin::redact_server "${server}")); \"${name}\" is not advertised."
+    fi
+
+    if [ "${id}" = default ]; then
+        exec sendspin-cli \
+            --config "${player_conf}" \
+            --state-dir "${player_state_dir}" \
+            --control-socket "${player_control_socket}"
+    fi
+
+    service_dir="${SENDSPIN_RUN_DIR}/services/${id}"
+    mkdir -p "${service_dir}"
+    ln -sf /usr/lib/sendspin-cli/player-run "${service_dir}/run"
+    # All rooms stop concurrently, leaving time for Avahi and D-Bus to stop.
+    printf '1000\n' > "${service_dir}/timeout-kill"
+done <<< "${players}"
+
+exec s6-svscan "${SENDSPIN_RUN_DIR}/services"

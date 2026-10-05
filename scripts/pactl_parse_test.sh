@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Unit checks for the silent-output check in rootfs/usr/lib/sendspin-cli/common.sh.
+# Unit checks for the silent-output check in local_audio_zones/rootfs/usr/lib/sendspin-cli/common.sh.
 #
 # `pactl`'s output format is not this repo's to keep stable, and a format that moved would turn
 # the warnings off with no symptom anywhere -- on an image that still builds and still boots. So
@@ -18,8 +18,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 readonly SCRIPT_DIR
 
-# shellcheck source=../rootfs/usr/lib/sendspin-cli/common.sh
-source "$SCRIPT_DIR/../rootfs/usr/lib/sendspin-cli/common.sh"
+# shellcheck source=../local_audio_zones/rootfs/usr/lib/sendspin-cli/common.sh
+source "$SCRIPT_DIR/../local_audio_zones/rootfs/usr/lib/sendspin-cli/common.sh"
 
 FAILURES=0
 
@@ -687,8 +687,31 @@ check_end_to_end() {
     esac
 }
 
+check_zone_diagnostics() {
+    local out
+    step 'explicit zone outputs'
+    out=$(sendspin::report_on_sinks ca7_missing "$TWO_SINKS" zone 2>&1)
+    case $out in
+        *'configured zone output ca7_missing is not among the outputs'*'will not play through the default output.'*)
+            pass 'a missing zone output is identified without falling back to another room' ;;
+        *) fail 'a missing zone output is identified without falling back to another room' ;;
+    esac
+    case $out in
+        *'Pick one of them'*|*'PulseAudio falls back'*) fail 'zone diagnostics incorrectly recommend the default selector' ;;
+        *) pass 'zone diagnostics recommend restoring the configured output' ;;
+    esac
+    out=$(sendspin::report_on_sinks ca7_missing '' zone 2>&1)
+    assert_equal 'PulseAudio lists no audio outputs. This zone will wait for ca7_missing.' \
+        "$out" 'an empty sink list leaves the zone waiting for its own output'
+    out=$(sendspin::report_on_sinks alsa_output.usb-Topping_D10s-00.analog-stereo "$TWO_SINKS" zone 2>&1)
+    case $out in
+        *'at 0%'*'ha audio volume output --index 7'*) pass 'zone diagnostics report the selected output and its silent hardware level' ;;
+        *) fail 'zone diagnostics report the selected output and its silent hardware level' ;;
+    esac
+}
+
 main() {
-    printf 'pactl parse: checking %s\n' "$SCRIPT_DIR/../rootfs/usr/lib/sendspin-cli/common.sh"
+    printf 'pactl parse: checking %s\n' "$SCRIPT_DIR/../local_audio_zones/rootfs/usr/lib/sendspin-cli/common.sh"
 
     check_client_conf_default_sink
     check_server_default_sink
@@ -701,6 +724,7 @@ main() {
     check_the_report_line
     check_the_bail_outs
     check_end_to_end
+    check_zone_diagnostics
 
     if [ "$FAILURES" -ne 0 ]; then
         printf '\npactl parse: %d check(s) failed\n' "$FAILURES" >&2

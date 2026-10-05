@@ -1,19 +1,9 @@
-# sync-store.yml fires on this name, and GitHub matches it silently -- rename them together.
-# The lint job in build.yml asserts the pair agrees.
 name: Release
 
-# A human tags; this publishes what that tag builds. Nothing here creates a tag, and there is no
-# second trigger -- no branch push, no pull request, no schedule, no `workflow_dispatch` -- so the
-# only way to reach a published manifest is to have pushed a `v*` tag. build.yml filters on
-# branches and so never fires for a tag, leaving one workflow to answer for one tag.
 on:
   push:
     tags:
       - 'v*'
-
-# Deliberately no `concurrency` block, where build.yml has one. Its `cancel-in-progress: true`
-# could cancel a run midway through assembling the manifest, which is the partial state the
-# arrangement below exists to make impossible. A tag is pushed once, so nothing supersedes it.
 
 permissions:
   contents: read
@@ -23,10 +13,6 @@ defaults:
     shell: bash
 
 jobs:
-  # Ahead of the matrix, so a mistyped tag does not burn two runners for half an hour first. The
-  # one thing checkable without building is that the tag and the add-on manifest agree on the
-  # version: the store card pulls `image:version`, and a manifest naming a tag that was never
-  # pushed is an add-on that cannot install.
   preflight:
     name: preflight
     runs-on: ubuntu-24.04
@@ -42,28 +28,17 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          manifest=local_audio/config.yaml
+          manifest=local_audio_zones/config.yaml
           [ -f "$manifest" ] || {
             echo "::error::$manifest does not exist -- there is no version to publish against"
             exit 1
           }
 
-          # The `v*` trigger also matches v0.1.0rc1, which would be published as `latest` with
-          # nobody having decided that it should be. Refused here rather than handled, and the
-          # refusal is a decision rather than an oversight: Home Assistant accepts a PEP 440
-          # prerelease as an add-on version, and Music Assistant ships its betas as a separate
-          # add-on slug pointing at a separate image. Whoever first wants a prerelease of this
-          # one can decide which of those it should be.
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
             echo "::error::tag $TAG is not vMAJOR.MINOR.PATCH; this workflow publishes releases only"
             exit 1
           }
 
-          # Counted rather than read first-match-wins, which is what catches a second `version:`
-          # line appearing further down the file: taking the first would silently pick between
-          # them. `|| true` because `grep -c` exits 1 on a count of zero and this shell runs
-          # under `-e`, so without it the step dies on the assignment and the message below --
-          # the one that says what is actually wrong -- never prints.
           pattern='^version:[[:space:]]*"?[0-9]+\.[0-9]+\.[0-9]+"?[[:space:]]*$'
           matches="$(grep -cE "$pattern" "$manifest" || true)"
           [ "$matches" = 1 ] || {
@@ -79,18 +54,11 @@ jobs:
           }
           echo "version=$version" >>"$GITHUB_OUTPUT"
 
-  # One leg per architecture, on the same native runners build.yml uses, and each one pushes an
-  # image nothing yet refers to. The order matters: the digest is pushed first, then pulled back
-  # and smoke-tested *by that digest*, so the bits tested are the bits pushed by identity rather
-  # than by an argument about build caches. A leg that fails its smoke leaves an unreferenced
-  # digest behind, which no tag names and nothing will pull.
   publish:
     name: ${{ matrix.arch }}
     needs: preflight
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    # Scoped to this job rather than the workflow, which stays read-only. `contents: read` is
-    # restated because naming any permission drops the rest to none.
     permissions:
       contents: read
       packages: write
@@ -98,9 +66,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # The same two legs and the same two base digests as build.yml, duplicated rather than
-          # shared because a reusable workflow cannot own the `strategy.matrix` that is the thing
-          # worth not duplicating. Bump them together.
           - arch: amd64
             runner: ubuntu-24.04
             base: ghcr.io/home-assistant/amd64-base-debian@sha256:9281ee991c28532ddae10114ac84750f4aca287a496f6e19583f3a750ad5e786
@@ -110,18 +75,14 @@ jobs:
             base: ghcr.io/home-assistant/aarch64-base-debian@sha256:acc61c0ab60cbca176ec0fe4d37278be514a4a6babfc1becde951c99d17e92f0
             expect_arch: arm64
     env:
-      # Follows the repository, so a fork publishes into its own namespace rather than failing on
-      # a push it has no rights to. On the canonical repository this is exactly the `image:` the
-      # add-on manifest names. A fork under an owner whose name carries capitals would be refused
-      # by the registry, which only takes lower case; the refusal says so.
       REPO: ghcr.io/${{ github.repository }}
     steps:
+      - name: Select image repository
+        run: echo "REPO=${REPO,,}" >>"$GITHUB_ENV"
+
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Needed for the push below and for nothing else: the default builder cannot push an image
-      # by digest without also giving it a tag, and a tag is the one thing a leg on its own must
-      # not create.
       - name: Set up buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
@@ -132,29 +93,20 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # `push-by-digest=true` with `name-canonical=true` pushes the manifest and reports its
-      # digest without writing any tag, which is what makes a half-finished release harmless.
-      #
-      # Provenance and SBOM off: with them on, each push is an index wrapping the real manifest
-      # plus an attestation manifest whose platform is `unknown/unknown`, and the manifest job
-      # below would assemble a list carrying two phantom entries beside the two real ones. Home
-      # Assistant pulls such an image happily -- Music Assistant's own server image has those
-      # entries today -- so this buys a manifest that says what it contains rather than fixing
-      # a break.
-      #
-      # The digest is read from the metadata file rather than scraped out of the build log.
       - name: Build and push this architecture by digest
         id: push
         env:
           BASE: ${{ matrix.base }}
+          APP_VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           docker buildx build \
             --build-arg "BUILD_FROM=$BASE" \
+            --build-arg "APP_VERSION=$APP_VERSION" \
             --provenance=false \
             --sbom=false \
             --metadata-file metadata.json \
             --output "type=image,name=$REPO,push-by-digest=true,name-canonical=true,push=true" \
-            .
+            local_audio_zones
           digest="$(jq -er '."containerimage.digest"' metadata.json)"
           echo "pushed $REPO@$digest"
           echo "digest=$digest" >>"$GITHUB_OUTPUT"
@@ -176,8 +128,6 @@ jobs:
             exit 1
           }
 
-      # The confined check loads local_audio/apparmor.txt into this runner's kernel. A no-op on
-      # the runner image as it stands, and here for the reason it is in build.yml.
       - name: Make sure apparmor_parser is installed
         run: |
           if ! command -v apparmor_parser >/dev/null; then
@@ -185,10 +135,6 @@ jobs:
             sudo apt-get install --yes --no-install-recommends apparmor
           fi
 
-      # The same suite build.yml runs on a push, run against the pushed digest. A release is
-      # gated on exactly what a push is gated on, both option sources included -- and
-      # `--require-apparmor` is part of "exactly", since this is the run that decides what a user
-      # installs.
       - name: Smoke test, standalone mode
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
@@ -199,9 +145,6 @@ jobs:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: scripts/smoke_test.sh "$REPO@$DIGEST" --mode addon --require-apparmor
 
-      # A matrix leg cannot hand a per-leg value to a later job through `outputs`, so the digest
-      # travels as a file named after the architecture that produced it. The manifest job asserts
-      # the set of names it receives, which a count could not do.
       - name: Record the digest for the manifest job
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
@@ -217,9 +160,6 @@ jobs:
           path: digests/
           if-no-files-found: error
 
-  # The only job that publishes anything a user can pull. It needs both legs green, so a release
-  # is either a complete two-architecture manifest or it is nothing: the digests the legs pushed
-  # are unreferenced until this runs, and stay that way if it does not.
   manifest:
     name: manifest
     needs: [preflight, publish]
@@ -232,16 +172,12 @@ jobs:
       REPO: ghcr.io/${{ github.repository }}
       VERSION: ${{ needs.preflight.outputs.version }}
     steps:
-      # `imagetools` talks to the registry rather than to a builder, but the buildx CLI is what
-      # carries the subcommand, and a tag push is the first chance to find this one broken. Set
-      # up explicitly rather than left to whatever builder the runner image ships with.
+      - name: Select image repository
+        run: echo "REPO=${REPO,,}" >>"$GITHUB_ENV"
+
       - name: Set up buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
-      # `merge-multiple`, or each artifact arrives in a directory named after itself and the
-      # paths below gain a redundant level. No `name:` or `pattern:`, so this asks for whatever
-      # the legs produced: the assertion that follows is what says whether that was the right
-      # set, and a pattern here would pre-filter the evidence.
       - name: Download the digests
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -250,8 +186,6 @@ jobs:
 
       - name: Check every architecture reported a digest
         run: |
-          # The set rather than the count. `needs: publish` does not cover a leg that went green
-          # having uploaded nothing, and "exactly two" is satisfied by the wrong two.
           found="$(find digests -maxdepth 1 -type f -exec basename {} \; | sort | tr '\n' ' ')"
           expected='aarch64 amd64 '
           echo "digests received from: $found"
@@ -273,9 +207,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Both tags in one call, from one index, so `latest` cannot come to mean something the
-      # version tag does not. The version tag is what the add-on manifest's `image:version` pulls
-      # and so the one that matters; `latest` is there for a `docker run` by hand.
       - name: Assemble and push the multi-architecture manifest
         run: |
           docker buildx imagetools create \
@@ -284,10 +215,6 @@ jobs:
             "$REPO@$(cat digests/amd64)" \
             "$REPO@$(cat digests/aarch64)"
 
-      # What was published, read back from the registry rather than assumed from the command
-      # above having exited 0. Two platforms and nothing else: an entry for an architecture the
-      # add-on manifest does not declare, or a phantom `unknown/unknown` one, means something
-      # upstream of here changed what it pushes.
       - name: Check the published manifest lists both architectures
         run: |
           platforms="$(docker buildx imagetools inspect --raw "$REPO:$VERSION" |
@@ -299,24 +226,11 @@ jobs:
           }
           echo "published $REPO:$VERSION and $REPO:latest"
 
-  # The Release object, and the one thing here a person rather than the Supervisor reads. Last
-  # and gated on `manifest`, so a Release is only ever written for a tag whose image is complete:
-  # `manifest` is the job that proves both architectures are in one index, and until it has run
-  # there is nothing installable for a Release to announce.
-  #
-  # A consequence worth naming, because it is not visible from here: sync-store.yml fires on this
-  # workflow *concluding successfully*, so a failure in this job withholds the store card bump
-  # for an image that published perfectly. Re-running the workflow is the recovery, and the
-  # existing-release check the job opens with is what makes that re-run land green rather than
-  # dying on a Release that is already there.
   release:
     name: release
     needs: [preflight, manifest]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # The only permission this job holds, and the only one it needs. Unlike the jobs above there
-    # is nothing to restate alongside it: `write` on a scope carries `read` on that scope, the
-    # checkout below reads this repository through it, and nothing here touches ghcr.
     permissions:
       contents: write
     env:
@@ -324,31 +238,15 @@ jobs:
       VERSION: ${{ needs.preflight.outputs.version }}
       TAG: ${{ github.ref_name }}
     steps:
-      # Whole history, for the tag lookup below rather than for anything that gets built: the
-      # previous release has to be found among this tag's ancestors, and the single-commit
-      # checkout the other jobs take carries neither the history nor the other tags to find it
-      # among.
-      #
-      # `persist-credentials: false` because everything below runs out of this checkout while the
-      # job holds `contents: write`, and nothing here needs a git credential: the tag lookup is
-      # local and `gh` is handed its token explicitly, in the two steps that call it.
+      - name: Select image repository
+        run: echo "REPO=${REPO,,}" >>"$GITHUB_ENV"
+
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      # First, so that a tag which already has one costs nothing further and every step after
-      # this is skipped rather than run and discarded. A tag is immutable, so a re-run would
-      # assemble the same notes out of the same changelog and pin the same compose file to the
-      # same image -- there is nothing a second create could add, and it would fail rather than
-      # do nothing. Exiting green instead is what lets a re-run be the recovery for a failure
-      # further up, and it keeps a replayed old tag from overwriting a Release somebody wrote by
-      # hand.
-      #
-      # A `gh` failure that is not a 404 lands here as "no release", and the create below then
-      # fails on the release that does exist. Wrong twice is still red, and the re-run after it
-      # comes out right.
       - name: Check whether this tag already has a release
         id: existing
         env:
@@ -361,32 +259,25 @@ jobs:
             echo "exists=false" >>"$GITHUB_OUTPUT"
           fi
 
-      # The release before this one, which is where the changelog range starts. Not every bump is
-      # tagged, so this is what decides whether the body carries one section or three.
-      #
-      # `git tag --list --merged` rather than `git describe`: it exits 0 with no output when
-      # nothing matches and non-zero on a real failure, so "there is no previous release" and
-      # "the tag lookup broke" stay told apart -- which `git describe`, exiting 128 for both,
-      # cannot do. It also asks for ancestry rather than for topological distance, so a tag
-      # reached through a merge, or two tags on one commit, need no answer.
-      #
-      # The filtering and the ordering are one awk program because `grep` exits 1 on no match,
-      # which under `pipefail` would kill the step before the message saying what was wrong could
-      # print. The comparison is field-by-field and numeric: sorted as text, v0.1.10 is below
-      # v0.1.9.
       - name: Find the release this one follows
         id: previous
         if: steps.existing.outputs.exists != 'true'
         run: |
           tags="$(git tag --list --merged "$TAG")"
-          previous="$(printf '%s\n' "$tags" | awk -v current="${TAG#v}" '
+          versions="$(sed -nE 's/^## ([0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$/\1/p' local_audio_zones/CHANGELOG.md)"
+          previous="$(printf '%s\n' "$tags" | awk -v current="${TAG#v}" -v versions="$versions" '
             function below(x, y,   i) {
               for (i = 1; i <= 3; i++)
                 if (x[i] + 0 != y[i] + 0) return x[i] + 0 < y[i] + 0
               return 0
             }
-            BEGIN { split(current, want, ".") }
+            BEGIN {
+              split(current, want, ".")
+              split(versions, list, /[[:space:]]+/)
+              for (i in list) released[list[i]] = 1
+            }
             /^v[0-9]+\.[0-9]+\.[0-9]+$/ {
+              if (!(substr($0, 2) in released)) next
               split(substr($0, 2), this, ".")
               if (!below(this, want)) next
               if (best == "" || below(high, this)) {
@@ -396,25 +287,13 @@ jobs:
             }
             END { print best }')"
 
-          # An empty answer is right exactly once, for the first release ever cut. Anywhere else
-          # it means this ran against a history that does not carry the tags -- and the body it
-          # would produce, every section in the changelog, is a plausible-looking Release rather
-          # than an obvious failure.
           if [ -z "$previous" ]; then
-            others="$(git tag --list 'v*' | grep -cE '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)"
-            [ "$others" = 1 ] || {
-              echo "::error::found no release tag before $TAG, yet the repository carries $others of them -- the history this ran against does not have the tags to look through"
-              exit 1
-            }
-            echo "no release precedes $TAG; this is the first"
+            echo "no earlier app release precedes $TAG"
           else
             echo "$TAG follows v$previous"
           fi
           echo "previous=$previous" >>"$GITHUB_OUTPUT"
 
-      # Every changelog section this tag delivers, which for a tag that skipped a version or two
-      # is more than its own. The script carries why the body is assembled rather than generated
-      # from the pull requests merged since.
       - name: Write the release notes
         if: steps.existing.outputs.exists != 'true'
         env:
@@ -427,22 +306,12 @@ jobs:
             >"$RUNNER_TEMP/release-notes.md"
           cat "$RUNNER_TEMP/release-notes.md"
 
-      # Written into RUNNER_TEMP rather than beside the checked-in one, which stays as it is:
-      # this file is attached to the Release and never committed.
       - name: Pin a compose file to the image that was published
         if: steps.existing.outputs.exists != 'true'
         run: |
           scripts/compose_pinned.sh --image "$REPO:$VERSION" >"$RUNNER_TEMP/docker-compose.yml"
           cat "$RUNNER_TEMP/docker-compose.yml"
 
-      # `--verify-tag` so that a ref which is somehow not the tag this ran for fails rather than
-      # having `gh` create a tag of its own. The title is the bare version, which is how the most
-      # recent release in this repository is titled -- a list reading 0.1.5 then v0.1.6 would be
-      # this job disagreeing with what is already there.
-      #
-      # A Release created with GITHUB_TOKEN raises no `release` event -- GitHub suppresses that
-      # to stop a workflow triggering itself. Nothing listens for one today; whoever adds an
-      # `on: release` workflow needs to know it would never fire from here.
       - name: Create the release
         if: steps.existing.outputs.exists != 'true'
         env:

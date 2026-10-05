@@ -89,7 +89,7 @@ check_the_shipped_compose_file() {
     changed="$(diff "$REAL_COMPOSE" <(printf '%s\n' "$pinned") | grep -c '^[<>]' || true)"
     assert_equal 2 "$changed" 'exactly one line differs from the file in the repository'
 
-    assert_equal '    build: .' \
+    assert_equal '    build: local_audio_zones' \
         "$(diff "$REAL_COMPOSE" <(printf '%s\n' "$pinned") | sed -n 's/^< //p')" \
         'the line that differs is the build line'
 
@@ -98,7 +98,7 @@ check_the_shipped_compose_file() {
     local line
     for line in 'network_mode: host' '- /dev/snd:/dev/snd' \
         '# - /var/run/dbus:/var/run/dbus:ro' 'SENDSPIN_OUTPUT: default' \
-        '# SENDSPIN_SERVER: 192.168.1.10:8927'; do
+        '# SENDSPIN_SERVER: "mdns:Music Assistant"'; do
         if printf '%s\n' "$pinned" | grep -qF -- "$line"; then
             pass "the asset still carries '$line'"
         else
@@ -111,14 +111,14 @@ check_it_refuses_a_file_it_cannot_pin() {
     step 'compose files with nothing to substitute'
 
     # The drift this script exists to catch on the pull request rather than on the tag: turning
-    # `build: .` into a block to add a `dockerfile:` or `args:` is an entirely reasonable change,
+    # `build: local_audio_zones` into a block to add a `dockerfile:` or `args:` is an entirely reasonable change,
     # and it leaves the release with nothing to replace.
     local block="$SCRATCH_ROOT/block-build.yml"
     cat >"$block" <<'COMPOSE'
 services:
   local-audio:
     build:
-      context: .
+      context: local_audio_zones
     container_name: ma-local-audio
 COMPOSE
     assert_refuses 1 'a block-form build: is refused rather than passed through' \
@@ -140,9 +140,9 @@ COMPOSE
     cat >"$two" <<'COMPOSE'
 services:
   local-audio:
-    build: .
+    build: local_audio_zones
   sidecar:
-    build: .
+    build: local_audio_zones
 COMPOSE
     assert_refuses 1 'two build: lines are refused rather than half-replaced' \
         --image "$IMAGE" --compose "$two"
@@ -153,7 +153,7 @@ COMPOSE
     cat >"$mixed" <<'COMPOSE'
 services:
   local-audio:
-    build: .
+    build: local_audio_zones
   sidecar:
     build:
       context: ./sidecar

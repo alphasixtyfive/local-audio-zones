@@ -5,8 +5,8 @@
 # The release body is assembled once per release and read by everyone the release reaches, and
 # nothing downstream of it would notice it being wrong: a body that quoted the wrong sections,
 # or none, publishes exactly as happily as a correct one. So the range it selects is asserted
-# here against the shipped changelog -- where "which sections does v0.1.5 deliver" has one right
-# answer -- and its edges against scratch changelogs that carry the cases the real file does not
+# here against the shipped changelog -- where the first release has one expected
+# section -- and its edges against scratch changelogs that carry the cases the real file does not
 # yet have.
 #
 # Needs: bash, sed, grep and mktemp.
@@ -18,8 +18,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 readonly SCRIPT_DIR
 readonly NOTES="$SCRIPT_DIR/release_notes.sh"
-readonly REAL_CHANGELOG="$SCRIPT_DIR/../local_audio/CHANGELOG.md"
-readonly IMAGE=ghcr.io/music-assistant/local-audio-addon
+readonly REAL_CHANGELOG="$SCRIPT_DIR/../local_audio_zones/CHANGELOG.md"
+readonly IMAGE=ghcr.io/example/local-audio-zones
 
 FAILURES=0
 SCRATCH_ROOT=""
@@ -89,73 +89,62 @@ assert_refuses() {
 }
 
 check_the_shipped_changelog() {
-    step 'the changelog as it stands'
-
-    # Every tagged release in this repository, and the versions each one actually delivered.
-    # v0.1.5 and v0.1.7 are the whole point: 0.1.3, 0.1.4 and 0.1.6 were bumped and written up
-    # and then went out under a later tag, which is why the store card's version jumps.
-    assert_delivers '0.1.8' 'v0.1.8 delivers only 0.1.8' \
-        --version 0.1.8 --previous 0.1.7 --changelog "$REAL_CHANGELOG"
-    assert_delivers '0.1.7 0.1.6' 'v0.1.7 delivers 0.1.7 and the untagged 0.1.6' \
-        --version 0.1.7 --previous 0.1.5 --changelog "$REAL_CHANGELOG"
-    assert_delivers '0.1.5 0.1.4 0.1.3' 'v0.1.5 delivers 0.1.5 and the untagged 0.1.4 and 0.1.3' \
-        --version 0.1.5 --previous 0.1.2 --changelog "$REAL_CHANGELOG"
-    assert_delivers '0.1.2' 'v0.1.2 delivers only 0.1.2' \
-        --version 0.1.2 --previous 0.1.1 --changelog "$REAL_CHANGELOG"
-    assert_delivers '0.1.1' 'v0.1.1 delivers only 0.1.1' \
-        --version 0.1.1 --previous 0.1.0 --changelog "$REAL_CHANGELOG"
-
-    # The first release, which has no previous tag to start the range at. Nothing preceded 0.1.0
-    # in the file, so "everything up to and including it" is that one section -- but the empty
-    # `--previous` is what is being exercised, not the count.
-    assert_delivers '0.1.0' 'the first release takes an empty --previous' \
+    step 'the app changelog'
+    assert_delivers '0.1.0' 'the first app release takes an empty --previous' \
         --version 0.1.0 --previous '' --changelog "$REAL_CHANGELOG"
-
-    # 0.1.0 alone cannot tell an open range from a single section, being the oldest thing in the
-    # file. This can: an empty --previous has to reach past 0.1.1 all the way down.
-    assert_delivers '0.1.2 0.1.1 0.1.0' 'an empty --previous opens the range rather than closing it' \
-        --version 0.1.2 --previous '' --changelog "$REAL_CHANGELOG"
+    assert_delivers '0.1.0' 'a lower baseline selects the first app release' \
+        --version 0.1.0 --previous 0.0.0 --changelog "$REAL_CHANGELOG"
 }
 
 check_the_lead_line() {
-    step 'the line the body opens with'
-
-    local body
-    body="$(body_of --version 0.1.8 --previous 0.1.7 --changelog "$REAL_CHANGELOG")"
-    assert_equal "Published as \`$IMAGE:0.1.8\` and \`$IMAGE:latest\`." \
+    step 'the release introduction'
+    local body changelog="$SCRATCH_ROOT/range.md"
+    body="$(body_of --version 0.1.0 --previous '' --changelog "$REAL_CHANGELOG")"
+    assert_equal "Published as \`$IMAGE:0.1.0\` and \`$IMAGE:latest\`." \
         "$(printf '%s\n' "$body" | head -1)" \
-        'the body opens by naming the image and both tags it was published under'
-
-    # The sentence exists only where it says something the headings do not: with one section
-    # nothing was folded in and there is nothing to account for.
+        'the introduction names the image and both published tags'
     if printf '%s\n' "$body" | grep -q '^Also carries'; then
-        fail 'a release delivering one version does not claim to carry anything else'
+        fail 'the first app release claims to carry an older release'
     else
-        pass 'a release delivering one version does not claim to carry anything else'
+        pass 'the first app release carries only its own section'
     fi
 
-    body="$(body_of --version 0.1.5 --previous 0.1.2 --changelog "$REAL_CHANGELOG")"
-    assert_equal 'Also carries 0.1.4 and 0.1.3, which were bumped without a release of their own and are first published here.' \
+    cat >"$changelog" <<'CHANGELOG'
+# Changelog
+
+## 1.4.0
+
+Latest.
+
+## 1.3.0
+
+Third.
+
+## 1.2.0
+
+Second.
+
+## 1.1.0
+
+First.
+CHANGELOG
+    assert_delivers '1.4.0 1.3.0 1.2.0 1.1.0' 'an empty previous opens the whole range' \
+        --version 1.4.0 --previous '' --changelog "$changelog"
+    body="$(body_of --version 1.4.0 --previous 1.1.0 --changelog "$changelog")"
+    assert_equal 'Also carries 1.3.0 and 1.2.0, which were bumped without a release of their own and are first published here.' \
         "$(printf '%s\n' "$body" | sed -n '/^Also carries/p')" \
-        'a release that skips versions names the ones it folds in'
+        'a range names the additional versions in the plural'
+    assert_equal "Published as \`$IMAGE:1.4.0\` and \`$IMAGE:latest\`.
 
-    # Singular, because v0.1.7 folded in exactly one. A sentence that said "which were bumped"
-    # of a single version would be the sort of wrong nothing downstream would catch.
-    body="$(body_of --version 0.1.7 --previous 0.1.5 --changelog "$REAL_CHANGELOG")"
-    assert_equal 'Also carries 0.1.6, which was bumped without a release of its own and is first published here.' \
-        "$(printf '%s\n' "$body" | sed -n '/^Also carries/p')" \
-        'one folded-in version is written in the singular'
+Also carries 1.3.0 and 1.2.0, which were bumped without a release of their own and are first published here.
 
-    # The layout the two joins above produce, which nothing else asserts: each part separated
-    # from the next by exactly one blank line, and the first section following them.
-    body="$(body_of --version 0.1.5 --previous 0.1.2 --changelog "$REAL_CHANGELOG")"
-    assert_equal "Published as \`$IMAGE:0.1.5\` and \`$IMAGE:latest\`.
-
-Also carries 0.1.4 and 0.1.3, which were bumped without a release of their own and are first published here.
-
-## 0.1.5" \
+## 1.4.0" \
         "$(printf '%s\n' "$body" | head -5)" \
-        'the body opens lead, blank, sentence, blank, section'
+        'the introduction and first section are separated by blank lines'
+    body="$(body_of --version 1.3.0 --previous 1.1.0 --changelog "$changelog")"
+    assert_equal 'Also carries 1.2.0, which was bumped without a release of its own and is first published here.' \
+        "$(printf '%s\n' "$body" | sed -n '/^Also carries/p')" \
+        'one additional version is described in the singular'
 }
 
 check_the_sections_are_verbatim() {
@@ -350,38 +339,38 @@ check_it_refuses_rather_than_publishing_nothing() {
     # The case this whole script exists to make loud. A tag whose version nobody wrote up would
     # otherwise publish an empty release body and look deliberate.
     assert_refuses 1 'a version with no section is an error, not an empty body' \
-        --version 9.9.9 --previous 0.1.8 --changelog "$REAL_CHANGELOG"
+        --version 9.9.9 --previous 0.1.0 --changelog "$REAL_CHANGELOG"
 
     assert_refuses 1 'a --previous at or above --version is refused' \
-        --version 0.1.5 --previous 0.1.8 --changelog "$REAL_CHANGELOG"
+        --version 0.0.0 --previous 0.1.0 --changelog "$REAL_CHANGELOG"
     assert_refuses 1 'a --previous equal to --version is refused' \
-        --version 0.1.8 --previous 0.1.8 --changelog "$REAL_CHANGELOG"
+        --version 0.1.0 --previous 0.1.0 --changelog "$REAL_CHANGELOG"
 
     assert_refuses 1 'a --version that is not MAJOR.MINOR.PATCH is refused' \
-        --version v0.1.8 --previous 0.1.7 --changelog "$REAL_CHANGELOG"
+        --version v0.1.0 --previous 0.0.0 --changelog "$REAL_CHANGELOG"
     assert_refuses 1 'a --previous that is neither a version nor empty is refused' \
-        --version 0.1.8 --previous v0.1.7 --changelog "$REAL_CHANGELOG"
+        --version 0.1.0 --previous v0.0.0 --changelog "$REAL_CHANGELOG"
 
     assert_refuses 1 'a changelog that does not exist is refused' \
-        --version 0.1.8 --previous 0.1.7 --changelog "$SCRATCH_ROOT/nowhere.md"
+        --version 0.1.0 --previous 0.0.0 --changelog "$SCRATCH_ROOT/nowhere.md"
 
     # The lead line appends `:$VERSION` and `:latest`, so a ref that arrived already tagged
     # would announce `repo:tag:version` -- an image nobody published.
     local status=0
-    "$NOTES" --image "$IMAGE:0.1.8" --version 0.1.8 --previous 0.1.7 \
+    "$NOTES" --image "$IMAGE:0.1.0" --version 0.1.0 --previous 0.0.0 \
         --changelog "$REAL_CHANGELOG" >/dev/null 2>&1 || status=$?
     assert_equal 1 "$status" 'an --image that already carries a tag is refused'
 
     # Usage rather than an error: `--previous` left off entirely is a caller that never looked
     # the previous tag up, and quoting the whole changelog at it would hide that.
     assert_refuses 2 'a missing --previous is a usage error, not an open range' \
-        --version 0.1.8 --changelog "$REAL_CHANGELOG"
+        --version 0.1.0 --changelog "$REAL_CHANGELOG"
     assert_refuses 2 'a missing --version is a usage error' \
-        --previous 0.1.7 --changelog "$REAL_CHANGELOG"
+        --previous 0.0.0 --changelog "$REAL_CHANGELOG"
     assert_refuses 2 'a flag left without its value is a usage error' \
-        --version 0.1.8 --previous
+        --version 0.1.0 --previous
     assert_refuses 2 'an unknown flag is a usage error' \
-        --version 0.1.8 --previous 0.1.7 --notes-file /dev/null
+        --version 0.1.0 --previous 0.0.0 --notes-file /dev/null
 }
 
 main() {

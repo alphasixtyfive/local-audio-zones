@@ -82,7 +82,7 @@ readonly FAKE_SUPERVISOR="$SCRIPT_DIR/fake_supervisor.py"
 readonly FAKE_SERVER="$SCRIPT_DIR/fake_server.py"
 
 # The add-on's own AppArmor profile. The name it is loaded under is APPARMOR_SLUG, below.
-readonly APPARMOR_SOURCE="$SCRIPT_DIR/../local_audio/apparmor.txt"
+readonly APPARMOR_SOURCE="$SCRIPT_DIR/../local_audio_zones/apparmor.txt"
 
 # The option values the checks ask for. A space in the name is deliberate: it is the one option
 # whose value reaches both the config file and the mDNS advertisement, and quoting it wrongly is
@@ -130,7 +130,7 @@ readonly HEALTH_TIMEOUT_S=150
 
 # The one deadline that is not ours to choose. It is handed to `docker stop`, so it is the grace
 # period the s6 shutdown is held to rather than a deadline on a poll. 10 is the Supervisor's own
-# add-on `timeout` option, which defaults to 10 and which local_audio/config.yaml does not set.
+# add-on `timeout` option, which defaults to 10 and which local_audio_zones/config.yaml does not set.
 # Anything more generous here passes a shutdown that real Home Assistant kills, which is exactly
 # how the 137 on every stop went unnoticed.
 readonly STOP_TIMEOUT_S=10
@@ -567,7 +567,7 @@ retire_player() {
 # the list that dies with it.
 start_player() {
     local name='' output='' log_level='' server='' apparmor='' stream=''
-    local buffer_ms='' audio_format='' id='' hook_start='' hook_stop=''
+    local buffer_ms='' audio_format='' id='' hook_start='' hook_stop='' zones=''
     local pair key value
     local -a args
 
@@ -584,6 +584,7 @@ start_player() {
             id) id=$value ;;
             hook_start) hook_start=$value ;;
             hook_stop) hook_stop=$value ;;
+            zones) zones=$value ;;
             stream) stream=$value ;;
             apparmor) apparmor=$value ;;
             *) fail "start_player: unknown option '$key'" ;;
@@ -617,9 +618,9 @@ start_player() {
     if [ "$MODE" = addon ]; then
         start_supervisor "name=$name" "output=$output" "log_level=$log_level" \
             "server=$server" "buffer_ms=$buffer_ms" "audio_format=$audio_format" "id=$id" \
-            "hook_start=$hook_start" "hook_stop=$hook_stop"
+            "hook_start=$hook_start" "hook_stop=$hook_stop" "zones=$zones"
         args+=(--add-host "${SUPERVISOR_HOST}:host-gateway")
-        args+=(--env "SUPERVISOR_TOKEN=$SUPERVISOR_TOKEN")
+        args+=(--env SENDSPIN_CONFIG_PORT=0 --env "SUPERVISOR_TOKEN=$SUPERVISOR_TOKEN")
         args+=(--env "SUPERVISOR_API=http://${SUPERVISOR_HOST}:${SUPERVISOR_PORT}")
     else
         if [ -n "$name" ]; then args+=(--env "SENDSPIN_NAME=$name"); fi
@@ -631,6 +632,7 @@ start_player() {
         if [ -n "$id" ]; then args+=(--env "SENDSPIN_ID=$id"); fi
         if [ -n "$hook_start" ]; then args+=(--env "SENDSPIN_HOOK_START=$hook_start"); fi
         if [ -n "$hook_stop" ]; then args+=(--env "SENDSPIN_HOOK_STOP=$hook_stop"); fi
+        if [ -n "$zones" ]; then args+=(--env "SENDSPIN_ZONES=$zones"); fi
     fi
 
     CONTAINERS+=("$PLAYER")
@@ -677,6 +679,29 @@ wait_for_healthcheck() {
         waited=$((waited + 1))
     done
     return 1
+}
+
+assert_healthcheck_tracks_avahi() {
+    local container=$1 log="$WORK_DIR/${1}.avahi-health"
+
+    docker exec "$container" s6-svc -wD -T 5000 -d /run/service/avahi ||
+        fail 'could not stop the bundled Avahi service'
+    docker exec "$container" sendspin-cli status \
+        --control-socket /run/sendspin-cli/control.sock >/dev/null ||
+        fail 'the player stopped responding while Avahi was down'
+    if healthcheck "$container" >"$log" 2>&1; then
+        fail 'the health check accepted a stopped Avahi service'
+    fi
+    grep -F 'The bundled Avahi service is not running.' "$log" >/dev/null ||
+        fail 'the health check failed without identifying the stopped Avahi service'
+    pass 'the health check rejects a stopped Avahi service while the player still answers'
+
+    docker exec "$container" s6-svc -wu -T 5000 -u /run/service/avahi ||
+        fail 'could not restart the bundled Avahi service'
+    wait_for_healthcheck "$container" "$BOOT_TIMEOUT_S" ||
+        fail 'the health check did not recover with Avahi'
+    assert_process "$container" avahi-daemon 'Avahi resumed after the health check test'
+    pass 'the health check recovers when Avahi restarts'
 }
 
 # Stops a player the way the Supervisor stops the add-on, and asserts it got there under its own
@@ -883,7 +908,7 @@ check_advertise_mode() {
     # reporting the library's identity to nearly everybody.
     assert_config_line "$container" '^manufacturer = Music Assistant$' \
         'the device list is told this image made the player, not the library it is built on'
-    assert_config_line "$container" '^product-name = Local Audio$' \
+    assert_config_line "$container" '^product-name = Local Audio Zones$' \
         'and told what the product is'
 
     # Read with exec rather than through config_of above: the mode belongs to the container's own
@@ -943,6 +968,7 @@ check_advertise_mode() {
     }
     pass 'docker reports the container healthy, so the HEALTHCHECK instruction runs'
 
+    assert_healthcheck_tracks_avahi "$container"
     assert_clean_stop "$container"
 }
 
@@ -975,7 +1001,7 @@ check_mdns_server_mode() {
         'Starting the bundled dbus and avahi-daemon: the mdns: server value needs mDNS to resolve the server.' \
         'the daemon decision is recorded and says to start them for the lookup'
     assert_log "$container" \
-        "Resolving the Music Assistant server over mDNS ($server); this player is not advertised." \
+        "Resolving the Music Assistant server over mDNS ($server); \"Local Audio\" is not advertised." \
         'the connection mode is logged as resolving over mDNS'
     assert_log "$container" 'listening on port 8928' 'the player came up on its port'
     assert_process "$container" avahi-daemon 'the bundled avahi-daemon is running for the lookup'
@@ -1262,12 +1288,12 @@ check_confined_stop() {
     assert_process "$container" 'avahi-daemon' 'avahi-daemon is running at the moment of the stop'
     assert_process "$container" 'dbus-daemon' 'dbus-daemon is running at the moment of the stop'
 
-    # The health check reaches into both daemons -- the player's control socket, then
-    # `avahi-daemon --check` -- and Docker calls the add-on unhealthy if it fails. Unconfined it
-    # is asserted nowhere else, and confined is the only way it could fail on a profile rule.
+    # The player answers over its control socket; s6 owns Avahi's process state.
     healthcheck "$container" >/dev/null ||
         fail 'the health check does not pass confined -- Docker would call the add-on unhealthy'
     pass 'the health check passes under the profile'
+
+    assert_healthcheck_tracks_avahi "$container"
 
     # Both daemons have dropped to their own users by now, which is the whole of what makes this
     # stop different: signalling them is a CAP_KILL the outer profile has to grant.
@@ -1326,7 +1352,7 @@ check_stream_hooks() {
 # rule it turns on is not in force there.
 #
 # That profile permitted no exec of anything before this change, so deleting its one
-# `/usr/bin/** ix` line from local_audio/apparmor.txt is what proves this check tests the grant
+# `/usr/bin/** ix` line from local_audio_zones/apparmor.txt is what proves this check tests the grant
 # rather than passing regardless: the player then reports the hook as having exited 127, its
 # own account of an execve() that failed, and the assertions below go red. The hook runs
 # /usr/bin/printf rather than the shell builtin of the same name so that the same one line is
@@ -1408,6 +1434,68 @@ check_supervisor_was_asked() {
         'an output of null survived the fetch as a value rather than becoming a default'
 }
 
+# Real players, with nested options delivered through the same path as the UI.
+check_multi_zone() {
+    local container id port name config setting diagnostic buffer level
+    local zones='[{"id":"study","name":"Study","output":"null"},{"id":"guest","name":"Guest room","output":"null","port":9010,"buffer_ms":100,"log_level":"info","server":"mdns:Guest server","hook_start":"printf guest-start","hook_stop":"printf guest-stop"}]'
+    step 'independent zones'
+    start_player "zones=$zones" 'log_level=warning' 'buffer_ms=250'
+    container=$PLAYER
+
+    wait_for_healthcheck "$container" "$BOOT_TIMEOUT_S" || fail 'the multi-zone health check never passed'
+    if [ "$MODE" = addon ]; then
+        assert_supervisor_requests 'the nested zone options came from the Supervisor'
+    fi
+
+    docker exec "$container" jq -e \
+        'map(.id) == ["study","guest"] and map(.port) == [8928,9010] and map(.log_level) == ["warn","info"] and map(.buffer_ms) == ["250","100"]' \
+        /run/sendspin-cli/players.json > /dev/null || fail 'the zone manifest differs from the configured options'
+    pass 'both zones retain their identities, ports and inherited settings'
+
+    for id in study guest; do
+        if [ "$id" = study ]; then
+            port=8928; name=Study; buffer=250; level=warn
+        else
+            port=9010; name='Guest room'; buffer=100; level=info
+        fi
+        config=$(docker exec "$container" cat "/run/sendspin-cli/zones/$id/config")
+        for setting in "name = $name" "id = $id" "port = $port" \
+            'output = null' "log-level = $level" "buffer-ms = $buffer"; do
+            grep -Fx "$setting" <<< "$config" > /dev/null || fail "$id has no configuration line: $setting"
+        done
+        if [ "$id" = guest ]; then
+            for setting in 'server = mdns:Guest server' \
+                'hook-start = printf guest-start' 'hook-stop = printf guest-stop'; do
+                grep -Fx "$setting" <<< "$config" > /dev/null || fail "$id has no configuration line: $setting"
+            done
+        fi
+        [ "$(docker exec "$container" stat -c %a "/run/sendspin-cli/zones/$id/config")" = 600 ] \
+            || fail "$id configuration is not private"
+        docker exec "$container" sendspin-cli status \
+            --control-socket "/run/sendspin-cli/zones/$id/control.sock" > /dev/null \
+            || fail "$id does not answer on its own control socket"
+        # Warning-level logging suppresses the player's informational startup line.
+        # shellcheck disable=SC2016
+        docker exec "$container" /bin/bash -c ': > "/dev/tcp/127.0.0.1/$1"' bash "$port" \
+            || fail "$id is not listening on its configured port"
+        pass "$name renders its native configuration and answers independently"
+    done
+
+    healthcheck "$container" > /dev/null || fail 'the multi-zone health check failed'
+    docker exec "$container" mv /run/sendspin-cli/zones/guest/control.sock \
+        /run/sendspin-cli/zones/guest/control.sock.hidden
+    if diagnostic=$(healthcheck "$container" 2>&1); then
+        fail 'the health check accepted an unavailable second zone'
+    fi
+    grep -F 'Player guest is not responding' <<< "$diagnostic" > /dev/null \
+        || fail 'the health check did not identify the unavailable Guest room'
+    docker exec "$container" mv /run/sendspin-cli/zones/guest/control.sock.hidden \
+        /run/sendspin-cli/zones/guest/control.sock
+    healthcheck "$container" > /dev/null || fail 'the health check did not recover with Guest room'
+    pass 'health includes every room and recovers when its control socket returns'
+    assert_clean_stop "$container"
+}
+
 # The add-on path's own failure mode, and the reason the options are fetched once rather than per
 # key: a Supervisor that cannot be reached must stop the container, not let every option fall
 # through to a default and run a player nobody configured.
@@ -1423,7 +1511,7 @@ check_supervisor_unreachable() {
     PLAYER=$container
     CONTAINERS+=("$container")
     docker run --detach --name "$container" \
-        --env "SUPERVISOR_TOKEN=$SUPERVISOR_TOKEN" \
+        --env SENDSPIN_CONFIG_PORT=0 --env "SUPERVISOR_TOKEN=$SUPERVISOR_TOKEN" \
         --env 'SUPERVISOR_API=http://127.0.0.1:1' \
         "$IMAGE" >/dev/null || fail "could not start $IMAGE"
 
@@ -1470,6 +1558,7 @@ main() {
     check_output_names_that_did_not
     check_buffer_ms
     check_compose_only_options
+    check_multi_zone
     check_crash_visibility
     check_stream_hooks
     check_confined_stop

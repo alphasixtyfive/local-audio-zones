@@ -3,12 +3,8 @@
 # Assembles the body of the GitHub Release for a tag, out of the changelog sections that tag
 # delivers.
 #
-# Not every bump is tagged -- 0.1.3 and 0.1.4 were bumped and then delivered together by v0.1.5 --
-# so the body is every `## X.Y.Z` section strictly after the previous release's version through
-# the one being released, rather than the section for the released version alone. That is what
-# accounts for a store card whose version jumps by more than one, and it makes the accounting
-# mechanical: where the range starts is decided by the previous tag, not by whoever is writing
-# the release up.
+# Include every changelog section after the previous release through the current
+# version, so untagged intermediate versions appear in the release that ships them.
 #
 # Not GitHub's generated notes, which are a list of pull requests. The changelog is written in a
 # user-facing voice for the people the Release page is read by, and this is the second place it
@@ -31,7 +27,7 @@ readonly SCRIPT_DIR
 VERSION=''
 PREVIOUS=''
 IMAGE=''
-CHANGELOG="$SCRIPT_DIR/../local_audio/CHANGELOG.md"
+CHANGELOG="$SCRIPT_DIR/../local_audio_zones/CHANGELOG.md"
 have_previous=0
 
 usage() {

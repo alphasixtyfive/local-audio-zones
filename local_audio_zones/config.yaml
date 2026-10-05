@@ -1,0 +1,45 @@
+name: Local Audio Zones
+version: "0.1.0"
+slug: local_audio_zones
+description: Independent Music Assistant players for each audio output.
+arch:
+  - amd64
+  - aarch64
+# First release; experimental while broader hardware testing continues.
+stage: experimental
+# Advertise before Home Assistant and Music Assistant start.
+startup: services
+# s6-overlay owns process supervision.
+init: false
+# mDNS and inbound Sendspin connections use the host network.
+host_network: true
+# Use the Home Assistant OS PulseAudio server.
+audio: true
+ingress: true
+ingress_port: 8099
+panel_title: Local Audio Zones
+panel_icon: mdi:speaker-multiple
+panel_admin: true
+# Core access verifies the editor user's administrator role.
+homeassistant_api: true
+options:
+  log_level: info
+  zones: []
+# Optional room values inherit app settings; unset app values use CLI defaults.
+schema:
+  name: str?
+  log_level: list(debug|info|warning|error)
+  server: str?
+  buffer_ms: int(10,2000)?
+  hook_start: str?
+  hook_stop: str?
+  zones:
+    - id: str
+      name: str
+      output: str
+      port: int(1024,65535)?
+      log_level: list(debug|info|warning|error)?
+      server: str?
+      buffer_ms: int(10,2000)?
+      hook_start: str?
+      hook_stop: str?

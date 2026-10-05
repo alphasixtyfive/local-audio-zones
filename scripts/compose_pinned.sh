@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Prints the repository's docker-compose.yml with `build: .` replaced by the image that was
+# Prints the repository's docker-compose.yml with `build: local_audio_zones` replaced by the image that was
 # published, for attaching to a GitHub Release.
 #
 # A Docker user who downloads it gets a file that pulls a released image rather than compiling
@@ -11,7 +11,7 @@
 #
 # Testable rather than a `sed` inside release.yml, because release.yml runs only on a tag: an
 # inline transform is first exercised by a real release, and docker-compose.yml is a file that
-# ordinary pull requests edit. Turning `build: .` into a block `build:` with a `context:` under
+# ordinary pull requests edit. Turning `build: local_audio_zones` into a block `build:` with a `context:` under
 # it is an entirely reasonable change that would leave nothing to substitute, and the pull
 # request making it should be the thing that goes red.
 #
@@ -85,9 +85,9 @@ readonly IMAGE COMPOSE
 # Counted rather than substituted first-match-wins. Nothing downstream would notice a compose
 # file that still built from source: it is valid YAML, `docker compose up` works, and the user
 # waits half an hour compiling the player instead of pulling the image this release published.
-readonly BUILD='^([[:space:]]+)build:[[:space:]]*\.[[:space:]]*$'
+readonly BUILD='^([[:space:]]+)build:[[:space:]]*local_audio_zones[[:space:]]*$'
 matches="$(grep -cE "$BUILD" "$COMPOSE" || true)"
-[ "$matches" = 1 ] || die "expected exactly one 'build: .' line in $COMPOSE, found $matches -- the substitution below has nothing to stand in for"
+[ "$matches" = 1 ] || die "expected exactly one 'build: local_audio_zones' line in $COMPOSE, found $matches -- the substitution below has nothing to stand in for"
 
 # `|` as the delimiter because the image ref carries slashes. The captured indentation is put
 # back, so the key lands at the depth the one it replaces sat at.

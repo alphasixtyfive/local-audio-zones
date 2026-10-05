@@ -1,0 +1,7 @@
+#!/command/with-contenv bash
+set -euo pipefail
+
+if [ -z "${SUPERVISOR_TOKEN:-}" ]; then
+    exec s6-pause
+fi
+exec python3 /usr/lib/sendspin-cli/config_server.py

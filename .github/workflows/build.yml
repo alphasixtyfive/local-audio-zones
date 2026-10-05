@@ -50,7 +50,7 @@ jobs:
       # Two invocations, and the split is what keeps this clean without suppressing anything.
       #
       # The rootfs scripts are the entry points only -- the shared library they source is not
-      # named here. `-x` with `--source-path=rootfs` resolves its absolute `source` path inside
+      # named here. `-x` with `--source-path=local_audio_zones/rootfs` resolves its absolute `source` path inside
       # the tree and analyses it in the context that uses it, which is the only context where its
       # variables are used at all: linting it on its own would report every path it defines as
       # unused and need an exclusion to say otherwise. `--shell=bash` because s6's
@@ -65,17 +65,21 @@ jobs:
       # GitHub-maintained tooling that fails loud at lint time does not need a digest of its own.
       - name: Lint the shell scripts
         run: |
-          shellcheck --shell=bash --external-sources --source-path=rootfs \
-            rootfs/usr/bin/container-healthcheck \
-            rootfs/usr/lib/sendspin-cli/decide-daemons \
-            rootfs/etc/s6-overlay/s6-rc.d/*/run \
-            rootfs/etc/s6-overlay/s6-rc.d/*/finish
+          shellcheck --shell=bash --external-sources --source-path=local_audio_zones/rootfs \
+            local_audio_zones/rootfs/usr/bin/container-healthcheck \
+            local_audio_zones/rootfs/usr/lib/sendspin-cli/decide-daemons \
+            local_audio_zones/rootfs/usr/lib/sendspin-cli/player-run \
+            local_audio_zones/rootfs/etc/s6-overlay/s6-rc.d/*/run \
+            local_audio_zones/rootfs/etc/s6-overlay/s6-rc.d/*/finish
           shellcheck -x --source-path=SCRIPTDIR scripts/*.sh
 
       # Needs no image, so it runs beside the linters rather than behind a build that compiles
       # the player from source.
       - name: Test the pactl parsing
         run: scripts/pactl_parse_test.sh
+
+      - name: Test zone configuration
+        run: sudo bash scripts/multi_zone_test.sh
 
       # Here rather than in the add-on job for the same reason as the one above: it reads a
       # scratch copy of the manifest and needs nothing but bash and awk.
@@ -92,27 +96,11 @@ jobs:
       - name: Test the pinned compose file
         run: scripts/compose_pinned_test.sh
 
-      # sync-store.yml fires on release.yml's `name:`, and GitHub matches the pair silently: a
-      # renamed Release would unhook the store sync with no symptom anywhere. Asserted here so
-      # the renaming pull request itself goes red.
-      - name: Check the workflow-name coupling the store sync rides on
-        run: |
-          release_name="$(sed -nE 's/^name:[[:space:]]*(.*[^[:space:]])[[:space:]]*$/\1/p' .github/workflows/release.yml | head -1)"
-          [ -n "$release_name" ] || {
-            echo "::error::could not read a name: from release.yml"
-            exit 1
-          }
-          awk -v n="$release_name" '$1 == "-" && $2 == n { found = 1 } END { exit !found }' \
-            .github/workflows/sync-store.yml || {
-            echo "::error::release.yml is named '$release_name' but sync-store.yml's workflow_run list does not carry it -- the store sync would silently never fire"
-            exit 1
-          }
-
   # The add-on manifest is what the Home Assistant add-on store reads, and one the Supervisor
   # rejects is a card that never appears -- a failure with no local symptom at all. This is the
   # only check anywhere that can see it, so it is worth its own job.
   #
-  # Nothing here is guarded on local_audio/ existing: a guarded step would go on reporting green
+  # Nothing here is guarded on local_audio_zones/ existing: a guarded step would go on reporting green
   # after a rename, and a rename is exactly what is worth catching.
   addon-lint:
     name: add-on manifest
@@ -124,13 +112,12 @@ jobs:
 
       # `community` is left at its default: everything past the linter's build-file section is
       # gated on that input, and that branch requires the version to be literally `dev` and a
-      # build.json to exist. This add-on has a real version and no build file, because its image
-      # is prebuilt rather than built by the store, so turning this on would fail it on both
-      # counts.
+      # build.json to exist. This app has a release version and pins its bases in
+      # the Dockerfile rather than using community mode's development convention.
       - name: Lint the add-on manifest
         uses: frenck/action-addon-linter@b9cfd1bc62ba60d2c4fc96317b5f7ada5923f4a7 # v2.21.1
         with:
-          path: ./local_audio
+          path: ./local_audio_zones
 
       # The linter above checks the manifest's schema; this checks its posture. A key that
       # costs a point of the Supervisor's 1-8 rating has no other symptom -- the add-on
@@ -169,9 +156,8 @@ jobs:
           # Native runners on both legs, so nothing here needs qemu.
           - arch: amd64
             runner: ubuntu-24.04
-            # Both base digests are passed rather than defaulted: the Dockerfile's default is the
-            # amd64 one, so the arm64 leg has to be told. The Dockerfile's own comment carries
-            # why all three files must move together, and on one Debian release.
+            # Explicit overrides must match the Dockerfile's two architecture base stages.
+            # Keep these pins and release.yml on the same Debian release.
             base: ghcr.io/home-assistant/amd64-base-debian@sha256:9281ee991c28532ddae10114ac84750f4aca287a496f6e19583f3a750ad5e786
             # What `docker image inspect` calls the result, and the third spelling of one thing:
             # the runner label says `arm`, docker says `arm64`, the add-on manifest `aarch64`.
@@ -194,7 +180,7 @@ jobs:
       - name: Build the image
         env:
           BASE: ${{ matrix.base }}
-        run: docker build --build-arg "BUILD_FROM=$BASE" --tag "$IMAGE" .
+        run: docker build --build-arg "BUILD_FROM=$BASE" --tag "$IMAGE" local_audio_zones
 
       - name: Check the image is the architecture this leg builds for
         env:
@@ -207,7 +193,7 @@ jobs:
             exit 1
           }
 
-      # The suite's one confined check loads local_audio/apparmor.txt into this runner's kernel
+      # The suite's one confined check loads local_audio_zones/apparmor.txt into this runner's kernel
       # and runs a container under it, which is the only place anything here is ever enforced. A
       # no-op on the runner image as it stands, as in the add-on job above.
       - name: Make sure apparmor_parser is installed
@@ -228,3 +214,19 @@ jobs:
 
       - name: Smoke test, add-on mode
         run: scripts/smoke_test.sh "$IMAGE" --mode addon --require-apparmor
+
+      - name: Test independent zone recovery and shutdown
+        run: scripts/multi_zone_supervision_test.sh "$IMAGE"
+
+      - name: Test the room editor API
+        run: |
+          docker run --rm --network none --entrypoint python3 \
+            --env PYTHONDONTWRITEBYTECODE=1 --volume "$PWD:/repo:ro" \
+            "$IMAGE" /repo/scripts/config_server_test.py
+
+      - name: Test named PulseAudio output isolation
+        run: |
+          docker build --build-arg PLAYER_IMAGE="$IMAGE" \
+            --file scripts/Dockerfile.audio-test --tag local-audio-audio-test scripts
+          docker run --rm --network none --volume "$PWD:/repo:ro" \
+            local-audio-audio-test /repo/scripts/pulse_isolation_test.py

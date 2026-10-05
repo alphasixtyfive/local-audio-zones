@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local Audio Zones</title>
+  <style>
+    :root { color-scheme: light dark; --background: #f5f6f8; --surface: #fff; --text: #202631; --muted: #536071; --border: #d5dbe2; --accent: #1266a8; --error: #a72323; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--background); color: var(--text); font: 16px/1.5 system-ui, sans-serif; }
+    main { max-width: 1040px; margin: 0 auto; padding: 28px 24px 44px; }
+    h1 { margin: 0; font-size: 1.8rem; font-weight: 650; }
+    h2 { margin: 0; font-size: 1.2rem; overflow-wrap: anywhere; }
+    p { margin: 8px 0 16px; }
+    .muted, .help { color: var(--muted); }
+    .help { margin: 6px 0 0; font-size: .875rem; }
+    .toolbar, .actions, .card-header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .toolbar { justify-content: space-between; margin: 24px 0 16px; }
+    .toolbar p { margin: 0; }
+    button, input, select { font: inherit; }
+    button { border: 1px solid var(--border); border-radius: 6px; padding: 9px 14px; background: var(--surface); color: var(--text); cursor: pointer; }
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    button:disabled { opacity: .55; cursor: default; }
+    .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .remove { color: var(--error); padding: 5px 10px; font-size: .875rem; }
+    :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+    #rooms { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .room { padding: 20px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+    .card-header { align-items: flex-start; justify-content: space-between; flex-wrap: nowrap; }
+    .card-header h2 { flex: 1; }
+    .field { margin-top: 16px; }
+    label { display: block; font-size: .925rem; font-weight: 550; }
+    input:not([type=checkbox]), select { width: 100%; min-height: 42px; margin-top: 6px; border: 1px solid var(--border); border-radius: 5px; padding: 8px 10px; color: var(--text); background: var(--surface); }
+    input:disabled, select:disabled { background: var(--background); color: var(--muted); }
+    .status { margin: 12px 0 0; color: var(--muted); font-size: .875rem; }
+    .status.unavailable { color: var(--error); }
+    details { margin-top: 20px; border-top: 1px solid var(--border); padding-top: 14px; }
+    summary { cursor: pointer; font-weight: 550; }
+    .override { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: .875rem; font-weight: 400; }
+    .override input { width: 17px; height: 17px; margin: 0; }
+    #empty, #feedback { border: 1px solid var(--border); border-radius: 6px; padding: 16px; background: var(--surface); }
+    #feedback { margin: 16px 0; white-space: pre-line; }
+    #feedback.error { border-color: var(--error); color: var(--error); }
+    #feedback:empty, [hidden] { display: none !important; }
+    .actions { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
+    .actions .help { flex-basis: 100%; }
+    #defaults { margin-top: 28px; }
+    dl { display: grid; grid-template-columns: minmax(120px, 1fr) 2fr; gap: 8px 20px; font-size: .875rem; }
+    dt { color: var(--muted); }
+    dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    @media (max-width: 680px) { main { padding: 20px 16px 32px; } #rooms { grid-template-columns: 1fr; } .room { padding: 16px; } .actions button { flex: 1; } }
+    @media (prefers-color-scheme: dark) { :root { --background: #14191f; --surface: #20262e; --text: #edf1f5; --muted: #b0bac7; --border: #46515e; --accent: #227bb8; --error: #ffaaa4; } }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Local Audio Zones</h1>
+      <p class="muted">Give each room a name and choose its audio output.</p>
+    </header>
+    <div id="feedback" role="status" aria-live="polite"></div>
+    <form id="settings-form" novalidate>
+      <div class="toolbar">
+        <p id="room-count" class="muted">Loading configuration…</p>
+        <div class="actions-inline">
+          <button id="reload" type="button" disabled>Reload</button>
+          <button id="add-room" type="button" disabled>Add room</button>
+        </div>
+      </div>
+      <div id="empty" hidden>
+        <strong>Single-player mode</strong>
+        <p class="help">The app uses its Audio selector while this list is empty. Add a room to choose independent outputs. Saving rooms replaces single-player mode.</p>
+      </div>
+      <div id="rooms"></div>
+      <details id="defaults" hidden>
+        <summary>App settings inherited by rooms</summary>
+        <p class="help">Change these defaults in the app’s Home Assistant Configuration tab. A room can override them under Advanced settings.</p>
+        <dl id="default-values"></dl>
+      </details>
+      <div class="actions">
+        <button id="save" class="primary" type="submit" disabled>Save configuration</button>
+        <button id="check" type="button" disabled>Check configuration</button>
+        <button id="restart" type="button" disabled hidden>Restart app</button>
+        <p id="save-note" class="help">Saving updates the app configuration. Restart the app to apply changes; playback will pause briefly.</p>
+        <p class="help">Checks confirm configuration, available outputs and current player responses. They cannot verify cables, amplifier settings or sound quality.</p>
+      </div>
+    </form>
+    <noscript>This room editor needs JavaScript. You can also edit zones in the app’s Home Assistant Configuration tab.</noscript>
+  </main>
+  <script>
+    'use strict';
+
+    const elements = Object.fromEntries([
+      'feedback', 'settings-form', 'room-count', 'reload', 'add-room', 'empty',
+      'rooms', 'defaults', 'default-values', 'save', 'check', 'restart', 'save-note'
+    ].map(id => [id, document.getElementById(id)]));
+    const overrides = [
+      { key: 'log_level', label: 'Log level', kind: 'log', fallback: 'info' },
+      { key: 'server', label: 'Music Assistant server', fallback: '', help: 'Empty uses normal discovery. Use mdns: or mdns:<name> to discover a server instead.' },
+      { key: 'buffer_ms', label: 'Audio buffer (ms)', kind: 'number', help: 'A whole number from 10 to 2000. Inherit to keep the app setting or native default.' },
+      { key: 'hook_start', label: 'Command when playback starts', fallback: '', help: 'Runs as a shell command inside the app. An empty override clears the inherited command.' },
+      { key: 'hook_stop', label: 'Command when playback stops', fallback: '', help: 'Runs as a shell command inside the app. An empty override clears the inherited command.' }
+    ];
+    let options = {}, zones = [], outputs = [], players = [], revision = '';
+    let baseline = '[]', csrfToken = '', loaded = false, busy = false, restartNeeded = false, fieldNumber = 0;
+    const owns = (object, key) => Object.prototype.hasOwnProperty.call(object, key);
+    const dirty = () => JSON.stringify(zones) !== baseline;
+
+    function node(tag, text, className) {
+      const result = document.createElement(tag);
+      if (text !== undefined) result.textContent = text;
+      if (className) result.className = className;
+      return result;
+    }
+
+    function feedback(message, error = false) {
+      elements.feedback.textContent = message;
+      elements.feedback.classList.toggle('error', error);
+      elements.feedback.setAttribute('role', error ? 'alert' : 'status');
+    }
+
+    function updateActions() {
+      for (const control of elements['settings-form'].querySelectorAll('button')) control.disabled = busy || !loaded;
+      elements.save.disabled = busy || !loaded || !dirty();
+      elements['add-room'].disabled = busy || !loaded || zones.length >= 32;
+      elements.restart.hidden = !restartNeeded;
+      elements.restart.disabled = busy || !loaded || dirty();
+      elements['room-count'].textContent = loaded ? `${zones.length} ${zones.length === 1 ? 'room' : 'rooms'}${dirty() ? ' · Unsaved changes' : ''}` : busy ? 'Loading configuration…' : 'Configuration unavailable';
+      elements.empty.hidden = !loaded || zones.length !== 0;
+      elements['settings-form'].setAttribute('aria-busy', String(busy));
+      elements['settings-form'].inert = busy;
+    }
+
+    function changed() {
+      feedback('');
+      elements['save-note'].textContent = 'Saving updates the app configuration. Restart the app to apply changes; playback will pause briefly.';
+      updateActions();
+    }
+
+    async function request(path, body) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 35000);
+      let response;
+      try {
+        response = await fetch(path, {
+          method: body === undefined ? 'GET' : 'POST',
+          credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
+          headers: body === undefined ? {} : { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
+          body: body === undefined ? undefined : JSON.stringify(body)
+        });
+      } catch {
+        clearTimeout(timer);
+        throw new Error('Cannot reach the app. Check that Local Audio Zones is running, then reload to check its current settings.');
+      }
+      let result;
+      try { result = await response.json(); }
+      catch { throw new Error('The app returned an unreadable response. Check the app log and try again.'); }
+      finally { clearTimeout(timer); }
+      if (!response.ok) throw new Error(result.error?.message || `The request failed (${response.status}). Check the app log and try again.`);
+      return result;
+    }
+
+    function field(parent, labelText, control, helpText) {
+      const wrapper = node('div', undefined, 'field');
+      const id = `field-${++fieldNumber}`;
+      control.id = id;
+      const label = node('label', labelText);
+      label.htmlFor = id;
+      wrapper.append(label, control);
+      if (helpText) {
+        const help = node('p', helpText, 'help');
+        help.id = `${id}-help`;
+        control.setAttribute('aria-describedby', help.id);
+        wrapper.append(help);
+      }
+      parent.append(wrapper);
+      return wrapper;
+    }
+
+    function input(type, value) {
+      const control = document.createElement('input');
+      control.type = type;
+      control.value = value ?? '';
+      return control;
+    }
+
+    function outputChannels(output) {
+      const map = output?.channel_map;
+      const channels = Array.isArray(map) ? map : typeof map === 'string' ? map.split(',').map(channel => channel.trim()).filter(Boolean) : [];
+      if (channels.length) return channels.length;
+      const match = output?.sample_specification?.match(/\b(\d+)ch\b/i);
+      return match ? Number(match[1]) : null;
+    }
+
+    function outputSelect(zone) {
+      const control = document.createElement('select');
+      control.required = true;
+      const placeholder = new Option('Choose an audio output', '');
+      placeholder.disabled = true;
+      control.add(placeholder);
+      for (const output of outputs.filter(output => outputChannels(output) === 2)) {
+        control.add(new Option(output.label || output.name || output.value, output.value));
+      }
+      const selected = outputs.find(output => output.value === zone.output);
+      if (zone.output && (!selected || outputChannels(selected) !== 2)) {
+        const channels = outputChannels(selected);
+        const detail = !selected ? 'unavailable' : channels === null ? 'channel count unknown' : `${channels} channels`;
+        control.add(new Option(`${selected?.label || zone.output} — ${detail}`, zone.output));
+      }
+      control.value = zone.output || '';
+      return control;
+    }
+
+    function roomStatus(zone, element) {
+      const selected = outputs.find(output => output.value === zone.output);
+      const available = selected && selected.available !== false;
+      const channels = outputChannels(selected);
+      const unverified = zone.output && !selected && !zone.output.startsWith('pulse:');
+      const player = players.find(player => player.id === zone.id);
+      const current = player && player.output === zone.output;
+      let text = !zone.output ? 'Choose an output for this room.' : available ? 'Output available.' : unverified ? 'Output availability unverified.' : 'Output unavailable. Check the host audio configuration.';
+      if (selected && channels !== 2) text += channels === null ? ' Channel count is unknown. Choose a stereo output for an independent room.' : ' Choose a stereo output for an independent room.';
+      if (current) text += player.healthy ? ' Current player is responding.' : ' Current player is not responding.';
+      else text += ' No current player using these settings.';
+      element.textContent = text;
+      element.classList.toggle('unavailable', Boolean(zone.output) && ((!available && !unverified) || (channels !== null && channels !== 2)));
+    }
+
+    function optionalField(parent, zone, definition) {
+      const { key, label, kind, help, fallback } = definition;
+      let control;
+      if (kind === 'log') {
+        control = document.createElement('select');
+        for (const value of ['debug', 'info', 'warning', 'error']) control.add(new Option(value, value));
+      } else control = input(kind === 'number' ? 'number' : 'text', '');
+      if (kind === 'number') { control.min = '10'; control.max = '2000'; control.step = '1'; }
+      const inherited = options[key] ?? fallback ?? '';
+      const displayValue = value => key === 'log_level' && value === 'warn' ? 'warning' : value;
+      control.value = displayValue(owns(zone, key) ? zone[key] : inherited);
+      control.disabled = !owns(zone, key);
+      control.required = kind === 'number' && owns(zone, key);
+      const wrapper = field(parent, label, control, help);
+      const toggleLabel = node('label', undefined, 'override');
+      const toggle = input('checkbox');
+      toggle.checked = owns(zone, key);
+      toggle.setAttribute('aria-label', `Override ${label.toLowerCase()}`);
+      toggleLabel.append(toggle, node('span', 'Override app setting'));
+      wrapper.insertBefore(toggleLabel, control);
+      const storeValue = () => {
+        zone[key] = kind === 'number' ? (control.value === '' ? null : Number(control.value)) : control.value;
+      };
+      toggle.addEventListener('change', () => {
+        control.disabled = !toggle.checked;
+        control.required = kind === 'number' && toggle.checked;
+        if (toggle.checked) {
+          storeValue();
+          control.focus();
+        } else {
+          delete zone[key];
+          control.value = displayValue(inherited);
+        }
+        changed();
+      });
+      control.addEventListener('input', () => { storeValue(); changed(); });
+    }
+
+    function renderRoom(zone) {
+      const card = node('section', undefined, 'room');
+      const header = node('div', undefined, 'card-header');
+      const heading = node('h2', zone.name || 'New room');
+      const remove = node('button', 'Remove', 'remove');
+      remove.type = 'button';
+      const updateHeading = () => {
+        heading.textContent = zone.name || 'New room';
+        remove.setAttribute('aria-label', `Remove ${zone.name || 'new room'}`);
+      };
+      updateHeading();
+      header.append(heading, remove);
+      card.append(header);
+      const name = input('text', zone.name);
+      name.required = true;
+      name.autocomplete = 'off';
+      field(card, 'Room name', name);
+      name.addEventListener('input', () => { zone.name = name.value; updateHeading(); changed(); });
+      const output = outputSelect(zone);
+      field(card, 'Audio output', output);
+      const status = node('p', undefined, 'status');
+      roomStatus(zone, status);
+      output.addEventListener('change', () => { zone.output = output.value; roomStatus(zone, status); changed(); });
+      card.append(status);
+
+      const advanced = node('details');
+      advanced.append(node('summary', 'Advanced settings'));
+      const id = input('text', zone.id);
+      id.required = true;
+      id.pattern = '[A-Za-z0-9][A-Za-z0-9_-]{0,63}';
+      field(advanced, 'Stable player ID', id, 'Keep this ID when renaming a room. Changing it creates a different Music Assistant player and saved state. “default” is reserved.');
+      id.addEventListener('input', () => { zone.id = id.value; roomStatus(zone, status); changed(); });
+      const port = input('number', owns(zone, 'port') ? zone.port : 8928 + zones.indexOf(zone));
+      port.min = '1024'; port.max = '65535'; port.step = '1';
+      port.disabled = !owns(zone, 'port');
+      port.required = owns(zone, 'port');
+      const portWrapper = field(advanced, 'Player port', port, 'Automatic ports start at 8928 in room order. Each room needs a unique port.');
+      const portLabel = node('label', undefined, 'override');
+      const explicitPort = input('checkbox');
+      explicitPort.checked = owns(zone, 'port');
+      portLabel.append(explicitPort, node('span', 'Set a port explicitly'));
+      portWrapper.insertBefore(portLabel, port);
+      explicitPort.addEventListener('change', () => {
+        port.disabled = !explicitPort.checked;
+        port.required = explicitPort.checked;
+        if (explicitPort.checked) { zone.port = Number(port.value); port.focus(); }
+        else { delete zone.port; port.value = 8928 + zones.indexOf(zone); }
+        changed();
+      });
+      port.addEventListener('input', () => { zone.port = port.value === '' ? null : Number(port.value); changed(); });
+      for (const definition of overrides) optionalField(advanced, zone, definition);
+      card.append(advanced);
+      remove.addEventListener('click', () => {
+        const single = zones.length === 1 ? ' Saving an empty list switches to single-player mode.' : '';
+        if (!window.confirm(`Remove ${zone.name || 'this room'}?${single}`)) return;
+        zones.splice(zones.indexOf(zone), 1);
+        renderRooms(); changed();
+        elements['add-room'].focus();
+      });
+      return card;
+    }
+
+    function renderRooms() {
+      elements.rooms.replaceChildren(...zones.map(renderRoom));
+      updateActions();
+    }
+
+    function renderDefaults() {
+      const values = [];
+      for (const definition of overrides) {
+        const value = options[definition.key] ?? definition.fallback ?? '';
+        const empty = definition.key === 'server' ? 'Automatic discovery' : definition.key === 'buffer_ms' ? 'Player default' : 'None';
+        values.push(node('dt', definition.label), node('dd', value === '' ? empty : String(value)));
+      }
+      elements['default-values'].replaceChildren(...values);
+      elements.defaults.hidden = false;
+    }
+
+    function validate() {
+      const invalid = elements['settings-form'].querySelector(':invalid');
+      if (invalid?.closest('details')) invalid.closest('details').open = true;
+      if (!elements['settings-form'].reportValidity()) return false;
+      const ids = new Set(), ports = new Set();
+      for (const [index, zone] of zones.entries()) {
+        if (!zone.name.trim()) { feedback(`Room ${index + 1} needs a name.`, true); return false; }
+        if (zone.id === 'default' || ids.has(zone.id)) { feedback(`The player ID “${zone.id}” is reserved or used by another room. Change it under Advanced settings.`, true); return false; }
+        const port = owns(zone, 'port') ? zone.port : 8928 + index;
+        if (!Number.isInteger(port) || port < 1024 || port > 65535 || ports.has(port)) { feedback(`Choose a unique port from 1024 to 65535 for ${zone.name} under Advanced settings.`, true); return false; }
+        ids.add(zone.id); ports.add(port);
+      }
+      return true;
+    }
+
+    async function load() {
+      busy = true; updateActions(); feedback('Loading configuration…');
+      try {
+        const result = await request('api/settings');
+        if (!result.options || !Array.isArray(result.options.zones ?? [])) throw new Error('The saved room configuration is not a list. Correct it in the app’s Configuration tab.');
+        options = result.options;
+        zones = structuredClone(options.zones ?? []);
+        outputs = result.outputs || []; players = result.players || [];
+        revision = result.revision;
+        csrfToken = result.csrf_token;
+        if (!csrfToken) throw new Error('The app did not provide a secure editing session. Reload the page before making changes.');
+        restartNeeded = Boolean(result.restart_required);
+        baseline = JSON.stringify(zones); loaded = true;
+        renderDefaults(); renderRooms(); feedback('');
+      } catch (error) { feedback(error.message, true); }
+      finally { busy = false; updateActions(); elements.reload.disabled = false; }
+    }
+
+    elements['add-room'].addEventListener('click', () => {
+      // Home Assistant may serve ingress over HTTP, where randomUUID is unavailable.
+      const bytes = crypto.getRandomValues(new Uint8Array(16));
+      const id = `zone-${Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')}`;
+      zones.push({ id, name: '', output: '' });
+      renderRooms(); changed();
+      elements.rooms.lastElementChild.querySelector('input').focus();
+    });
+    elements.reload.addEventListener('click', () => {
+      if (!dirty() || window.confirm('Discard unsaved room changes and reload the app configuration?')) load();
+    });
+    elements.check.addEventListener('click', async () => {
+      if (!validate()) return;
+      busy = true; updateActions(); feedback('Checking configuration and current players…');
+      try {
+        const result = await request('api/check', { zones, revision });
+        if (result.valid !== true) throw new Error('The app did not confirm that this configuration is valid. Check the app log.');
+        restartNeeded = Boolean(result.restart_required);
+        const lines = (result.checks || []).map(check => `${check.name}: ${check.available === null ? 'output availability unverified' : check.available ? 'output available' : 'output unavailable'}; ${check.running ? (check.healthy ? 'current player responding' : 'current player not responding') : 'not running with these settings'}.`);
+        feedback(['Configuration is valid.', ...lines, result.restart_required ? 'Restart the app after saving to apply changed room settings.' : 'Current room settings match the running configuration.'].join('\n'));
+      } catch (error) { feedback(error.message, true); }
+      finally { busy = false; updateActions(); }
+    });
+    elements['settings-form'].addEventListener('submit', async event => {
+      event.preventDefault();
+      if (busy || !loaded || !dirty() || !validate()) return;
+      busy = true; updateActions(); feedback('Saving configuration…');
+      try {
+        const result = await request('api/settings', { zones, revision });
+        if (!result.saved) throw new Error('The app did not confirm that the configuration was saved. Reload to check its current settings.');
+        revision = result.revision; baseline = JSON.stringify(zones);
+        restartNeeded = Boolean(result.restart_required);
+        const message = result.message || 'Saved. Restart Local Audio Zones from its Info tab to apply these settings.';
+        feedback(message);
+        elements['save-note'].textContent = message;
+      } catch (error) { feedback(error.message, true); }
+      finally { busy = false; updateActions(); }
+    });
+    elements.restart.addEventListener('click', async () => {
+      if (busy || dirty()) return;
+      busy = true; updateActions(); feedback('Requesting app restart…');
+      try {
+        const result = await request('api/restart', { revision });
+        if (!result.restarting) throw new Error('The app did not confirm a restart. Restart it from the Home Assistant Info tab.');
+        restartNeeded = false;
+        feedback('Restart requested. Playback will pause briefly. Reload after the app starts to check the rooms.');
+        elements['save-note'].textContent = 'Restart requested. Reload after the app starts to check the rooms.';
+      } catch (error) { feedback(error.message, true); }
+      finally { busy = false; updateActions(); }
+    });
+    window.addEventListener('beforeunload', event => {
+      if (dirty()) { event.preventDefault(); event.returnValue = ''; }
+    });
+    load();
+  </script>
+</body>
+</html>

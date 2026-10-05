@@ -53,7 +53,7 @@ def build_options(pairs):
         if not separator:
             raise SystemExit(f"--option needs KEY=VALUE, got {pair!r}")
         if value != "":
-            options[key] = value
+            options[key] = json.loads(value) if key == "zones" else value
     return options
 
 

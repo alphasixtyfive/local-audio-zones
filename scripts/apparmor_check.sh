@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Parses local_audio/apparmor.txt the way the Supervisor will.
+# Parses local_audio_zones/apparmor.txt the way the Supervisor will.
 #
 # Nothing else in this repository reads the file, and a typo in it has no local symptom: the
 # image still builds and the smoke suite still passes, while the add-on installs unconfined and
@@ -11,14 +11,14 @@
 #
 # Needs: bash, awk and apparmor_parser.
 #
-# Usage: scripts/apparmor_check.sh [PROFILE]        (default: local_audio/apparmor.txt)
+# Usage: scripts/apparmor_check.sh [PROFILE]        (default: local_audio_zones/apparmor.txt)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 readonly SCRIPT_DIR
 
-PROFILE="${1:-$SCRIPT_DIR/../local_audio/apparmor.txt}"
+PROFILE="${1:-$SCRIPT_DIR/../local_audio_zones/apparmor.txt}"
 readonly PROFILE
 
 # Both slug shapes, and deliberately different lengths: `local_` prefixed for a local add-on,

@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
 #
 # Recomputes the Supervisor's security rating for the add-on manifest and fails unless it is
-# still 5 -- on a rise as well as a drop.
+# still 7 -- on a rise as well as a drop.
 #
 # The score is `rating_security()` in supervisor/apps/utils.py, arithmetic over the manifest at
-# install time. For this one it is 5, +1 for the AppArmor profile, -1 for host_network. Nothing
+# install time. For this one it is 7: +1 for AppArmor, +2 for ingress, -1 for host_network. Nothing
 # else here would notice a key that costs a point: the manifest linter checks the schema rather
 # than the posture, and the number only ever surfaces on the store card.
 #
 # Needs: bash and awk.
 #
-# Usage: scripts/security_rating.sh [APP_DIR]        (default: local_audio/)
+# Usage: scripts/security_rating.sh [APP_DIR]        (default: local_audio_zones/)
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 readonly SCRIPT_DIR
 
-readonly EXPECTED_RATING=5
+readonly EXPECTED_RATING=7
 
 # The tuple in rating_security(), not the Capabilities enum: IPC_LOCK, SYS_NICE, SYS_RESOURCE
 # and SYS_TIME cost nothing.
 readonly DANGEROUS_CAPABILITIES='BPF CHECKPOINT_RESTORE DAC_READ_SEARCH NET_ADMIN NET_RAW
     PERFMON SYS_ADMIN SYS_MODULE SYS_PTRACE SYS_RAWIO'
 
-APP_DIR="${1:-$SCRIPT_DIR/../local_audio}"
+APP_DIR="${1:-$SCRIPT_DIR/../local_audio_zones}"
 readonly APP_DIR
 readonly CONFIG="$APP_DIR/config.yaml"
 

@@ -1,6 +1,6 @@
 services:
   local-audio:
-    build: .
+    build: local_audio_zones
     container_name: ma-local-audio
     restart: unless-stopped
     # Both halves of the player need the host's network namespace: mDNS to be

@@ -1,0 +1,5 @@
+# Only runtime files and the pinned source patch belong in the build context.
+*
+!rootfs
+!patches
+**/__pycache__
