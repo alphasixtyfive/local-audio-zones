@@ -16,7 +16,7 @@ PAIRS = {
     "side": ("side-left", "side-right"),
     "center_sub": ("front-center", "lfe"),
 }
-REGISTRY = Path("/run/sendspin-cli/audio-routes.json")
+REGISTRY = Path("/data/audio-routes.json")
 
 
 class RoutingError(Exception):
@@ -139,7 +139,16 @@ class AudioRoutes:
         sinks = self.listing("sinks")
         modules = self.listing("modules")
         routes = []
-        selected_pairs = {}
+        selected_channels = {}
+
+        def reserve_channels(master, channels, name):
+            for channel in channels:
+                previous = selected_channels.get((master, channel))
+                if previous is not None:
+                    raise RoutingError(name + " and " + previous + " share soundcard channel " + channel)
+            for channel in channels:
+                selected_channels[(master, channel)] = name
+
         for player in players:
             if "device" not in player:
                 routes.append((player, None, None))
@@ -156,29 +165,51 @@ class AudioRoutes:
                 and other.get("properties", {}).get("device.serial") == serial for other in cards
             ):
                 raise RoutingError(player["name"] + ": multiple soundcards share this by-id identity; "
-                                   "select an unambiguous control or playback device and verify the physical mapping")
-            channels = PAIRS[player.get("channel_pair", "front")]
-            masters = [sink for sink in sinks if self.matches_card(sink, card, index)
-                       and set(channels).issubset(self.channels(sink))
-                       and sink.get("properties", {}).get("device.class") != "filter"]
+                                   "select a by-path port or control/playback device and verify the physical mapping")
+            channels = tuple(player["channels"]) if "channels" in player else PAIRS[player.get("channel_pair", "front")]
+            card_sinks = [sink for sink in sinks if self.matches_card(sink, card, index)
+                          and sink.get("properties", {}).get("device.class") != "filter"]
+            masters = [sink for sink in card_sinks if set(channels).issubset(self.channels(sink))]
             if len(masters) != 1:
-                raise RoutingError(player["name"] + ": the active soundcard profile must provide a unique output with "
-                                   + ", ".join(channels) + "; select a suitable profile in Home Assistant's Audio settings")
-            key = (masters[0]["name"], channels)
-            if key in selected_pairs:
-                raise RoutingError(player["name"] + " and " + selected_pairs[key]
-                                   + " select the same soundcard channel pair")
-            selected_pairs[key] = player["name"]
+                available = list(dict.fromkeys(channel for sink in card_sinks for channel in self.channels(sink)))
+                raise RoutingError(player["name"] + ": requested " + ", ".join(channels)
+                                   + "; available channels: " + (", ".join(available) or "none")
+                                   + ". Choose two channels on one output or a suitable profile in Home Assistant's Audio settings")
+            reserve_channels(masters[0]["name"], channels, player["name"])
             routes.append((player, masters[0], channels))
+
+        module_by_index = {module["index"]: module for module in modules}
+        sink_by_name = {sink["name"]: sink for sink in sinks}
+        for player, master, _ in routes:
+            output = player.get("output", "")
+            if master is not None or not output.startswith("pulse:"):
+                continue
+            sink = sink_by_name.get(output[6:])
+            if sink is None:
+                continue
+            module = module_by_index.get(sink.get("owner_module"), {})
+            if module.get("name") == "module-remap-sink":
+                arguments = module_arguments(module["argument"])
+                source_channels = arguments.get("master_channel_map", "").split(",")
+                if arguments.get("master") and all(source_channels):
+                    reserve_channels(arguments["master"], source_channels, player["name"])
+            elif any(key[0] == sink["name"] for key in selected_channels):
+                reserve_channels(sink["name"], self.channels(sink), player["name"])
 
         owned = self.owned_modules()
         created = []
         result = []
+        reported_masters = set()
         selected_outputs = {player["output"]: player["name"] for player in players if "output" in player}
         try:
             for player, master, channels in routes:
                 player = dict(player)
                 if master is not None:
+                    if master["name"] not in reported_masters:
+                        description = master.get("description") or master["name"]
+                        print("Soundcard " + description + ": available channels "
+                              + ", ".join(self.channels(master)), file=sys.stderr)
+                        reported_masters.add(master["name"])
                     target = self.existing_remap(master, channels, sinks, modules)
                     output = "pulse:" + (target or "local_audio_zones_" + player["id"])
                     if output in selected_outputs:
@@ -205,7 +236,8 @@ class AudioRoutes:
                         modules.append(module)
                         sinks.append({"name": target, "owner_module": int(loaded), "channel_map": "front-left,front-right"})
                     player.pop("device")
-                    player.pop("channel_pair")
+                    player.pop("channel_pair", None)
+                    player.pop("channels", None)
                     player["output"] = "pulse:" + target
                     print(player["name"] + ": using " + player["output"], file=sys.stderr)
                 result.append(player)

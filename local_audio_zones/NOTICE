@@ -1,0 +1,26 @@
+Local Audio Zones
+
+This community app is based on Music Assistant Local Audio and its native
+Sendspin player update in pull request 34:
+https://github.com/music-assistant/local-audio-addon
+https://github.com/music-assistant/local-audio-addon/pull/34
+
+The packaging and startup code have been modified to provide independent room
+players, native room configuration, validated channel routing, durable route
+ownership, and separate supervision and saved state. The original Apache-2.0
+license is retained in LICENSE.
+
+The image builds sendspin-cpp-cli v0.2.0, commit
+e980128a9c37229cbc28c764e9f2fd65d1c5edb6, and its sendspin-cpp dependency.
+Copyright 2026 sendspin-cpp-cli Contributors.
+These projects use the Apache License, Version 2.0. The documented local patch
+pins named PulseAudio outputs using PA_STREAM_DONT_MOVE.
+https://github.com/Sendspin/sendspin-cpp-cli
+https://github.com/Sendspin/sendspin-cpp
+
+The icon adapts the HASSConnect house artwork with room speaker symbols.
+HASSConnect is Copyright (c) 2026 alphasixtyfive, under the MIT license retained
+in HASSCONNECT-LICENSE. https://github.com/alphasixtyfive/HASSConnect
+
+Local Audio Zones is independently maintained. Home Assistant and Music
+Assistant names identify compatibility and upstream origin, not endorsement.

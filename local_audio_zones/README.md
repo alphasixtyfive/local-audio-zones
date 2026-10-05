@@ -14,15 +14,23 @@ Each selected pair must exist in the card's
 active audio profile. The Log tab explains invalid selections and names the
 resolved PulseAudio output.
 
-If identical cards share a by-id identity, select an unambiguous control or
-playback device instead and verify its physical output after each restart.
+If identical cards share a by-id identity, prefer their separate
+`/dev/snd/by-path/` links and keep them on fixed physical ports. Otherwise select
+an unambiguous control or playback device and verify its physical output after
+each restart.
 
 | Pair | Channels |
 | --- | --- |
-| `front` | Front left/right |
-| `rear` | Rear left/right |
-| `side` | Side left/right |
-| `center_sub` | Front center/LFE |
+| Front left/right | `front-left,front-right` |
+| Rear left/right | `rear-left,rear-right` |
+| Side left/right | `side-left,side-right` |
+| Centre/Subwoofer | `front-center,lfe` |
+
+For other channel layouts, leave **Output pair** unset and enter two distinct
+names in **Custom channels**, for example `aux0,aux1`. The Log tab lists the
+selected card's available channels. Both standard and custom selections are
+validated against that list; the native form's standard choices do not change
+with the selected card. Rooms cannot share physical channels.
 
 The app reuses matching stereo outputs or creates standard PulseAudio remaps.
 It preserves hardware profiles, rates and output levels, and removes only
@@ -35,7 +43,8 @@ and start/stop commands can be set per room. Logging, server, buffer and command
 inherit the app settings when omitted. **Explicit output** accepts an existing
 native player output instead of selecting a sound device.
 
-Music Assistant controls playback, volume, mute and grouping. Keep its minimum
+Music Assistant creates standard parent players for the room outputs and
+controls playback, volume, mute and grouping. Keep its minimum
 volume at zero for silence at zero. Start quietly and calibrate maximum loudness
 at the amplifier or host output. An empty room list waits without creating a
 player.

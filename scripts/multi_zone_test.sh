@@ -31,7 +31,7 @@ prepare() {
 }
 check() {
     CHECKS=$((CHECKS + 1))
-    if jq -e "$2" "$WORK/players.json" > /dev/null; then
+    if jq -e "$2" "${3:-$WORK/players.json}" > /dev/null; then
         printf '  ok   %s\n' "$1"
     else
         printf '  FAIL %s\n' "$1" >&2
@@ -67,7 +67,7 @@ check 'explicit and automatic ports are distinct' 'map(.port) == [8928,8929,8930
 check 'IDs are the native player identities' 'map(.client_id) == ["study","guest-room","kids-room","bedroom"]'
 check 'all rooms inherit shared settings' 'all(.[]; .log_level == "debug" and .server == "mdns:Music Assistant" and .buffer_ms == "250" and .hook_start == "printf start" and .hook_stop == "printf stop")'
 render
-for setting in 'name = Study' 'output = pulse:existing_front' 'port = 8928' 'id = study' 'buffer-ms = 250' 'server = mdns:Music Assistant' 'hook-start = printf start' 'hook-stop = printf stop'; do
+for setting in 'manufacturer = Local Audio Zones' 'product-name = Local Audio Zones' 'name = Study' 'output = pulse:existing_front' 'port = 8928' 'id = study' 'buffer-ms = 250' 'server = mdns:Music Assistant' 'hook-start = printf start' 'hook-stop = printf stop'; do
     grep -Fx "$setting" "$WORK/player.conf" > /dev/null
 done
 prepare "$(jq -cn --argjson zones "$ZONES" '{zones:($zones | .[0] += {log_level:"warning",server:"mdns:Named",buffer_ms:100,hook_start:"printf zone-start",hook_stop:"printf zone-stop"} | .[1] += {server:"",hook_start:"",hook_stop:""}),log_level:"debug",server:"mdns:Global",buffer_ms:250,hook_start:"printf global-start",hook_stop:"printf global-stop"}')"
@@ -79,11 +79,41 @@ grep -Fx 'log-level = warn' "$WORK/player.conf" > /dev/null
 prepare "$(jq -cn '{zones:[range(0;32) | {id:("room-"+tostring),name:"Room",output:("pulse:room-"+tostring)}]}')"
 check '32 rooms have independent IDs and ports' 'length == 32 and (map(.client_id) | unique | length) == 32 and (map(.port) | unique | length) == 32'
 # Validate device schema separately from hardware; routing has its own private fixture.
-printf '%s\n' '{"zones":[{"id":"a","name":"A","device":"/dev/snd/by-id/usb-card"},{"id":"b","name":"B","device":"/dev/snd/pcmC4D0p","channel_pair":"rear"}]}' > "$OPTIONS"
+printf '%s\n' '{"zones":[{"id":"a","name":"A","device":"/dev/snd/by-id/usb-card"},{"id":"b","name":"B","device":"/dev/snd/pcmC4D0p","channel_pair":"Rear left/right"}]}' > "$OPTIONS"
 # shellcheck disable=SC2016
 bash -euo pipefail -c 'source "$1"; sendspin::read_options; sendspin::configured_players' bash "$COMMON" > "$WORK/devices.json"
-jq -e '.[0].channel_pair == "front" and .[1].channel_pair == "rear" and all(.[]; has("device") and (has("output") | not))' "$WORK/devices.json" > /dev/null
-printf '  ok   device selectors preserve explicit pairs and default to front\n'
+check 'device selectors normalize readable pairs and default to front' '.[0].channel_pair == "front" and .[1].channel_pair == "rear" and all(.[]; has("device") and (has("output") | not))' "$WORK/devices.json"
+configured() {
+    printf '%s\n' "$1" > "$OPTIONS"
+    # shellcheck disable=SC2016
+    bash -euo pipefail -c 'source "$1"; sendspin::read_options; sendspin::configured_players' bash "$COMMON" > "$WORK/devices.json" 2> "$WORK/stderr"
+}
+reject_configured() {
+    CHECKS=$((CHECKS + 1))
+    if configured "$2" || [ ! -s "$WORK/stderr" ]; then
+        printf '  FAIL invalid routing schema: %s\n' "$1" >&2
+        FAILURES=$((FAILURES + 1))
+    else
+        printf '  ok   refuses %s\n' "$1"
+    fi
+}
+configured '{"zones":[{"id":"front","name":"Front","device":"/dev/snd/controlC4","channel_pair":"Front left/right"},{"id":"rear","name":"Rear","device":"/dev/snd/controlC4","channel_pair":"Rear left/right"},{"id":"side","name":"Side","device":"/dev/snd/controlC4","channel_pair":"Side left/right"},{"id":"centre","name":"Centre","device":"/dev/snd/controlC4","channel_pair":"Centre/Subwoofer"}]}'
+check 'all readable output choices normalize to canonical channel pairs' 'map(.channel_pair) == ["front","rear","side","center_sub"]' "$WORK/devices.json"
+configured '{"zones":[{"id":"port","name":"Port","device":"/dev/snd/by-path/pci-0000:00:14.0-usb-0:2:1.0"}]}'
+check 'stable physical-path selectors preserve card identity' '.[0].device == "/dev/snd/by-path/pci-0000:00:14.0-usb-0:2:1.0" and .[0].channel_pair == "front"' "$WORK/devices.json"
+for device in '/dev/snd/by-path/.' '/dev/snd/by-path/..' '/dev/snd/by-id/..' '/dev/snd/by-path/../../other'; do
+    reject_configured "unsafe link selector $device" "$(jq -cn --arg device "$device" '{zones:[{id:"a",name:"A",device:$device}]}')"
+done
+configured '{"zones":[{"id":"custom","name":"Custom","device":"/dev/snd/controlC4","channels":" aux0, aux1 "}]}'
+check 'custom channels trim surrounding spaces and preserve channel order' '.[0].channels == ["aux0","aux1"] and (.[0] | has("channel_pair") | not)' "$WORK/devices.json"
+configured '{"zones":[{"id":"custom","name":"Custom","device":"/dev/snd/controlC4","channels":"front-right,front-left"}]}'
+check 'custom channel order can intentionally reverse stereo' '.[0].channels == ["front-right","front-left"]' "$WORK/devices.json"
+for channels in '"aux0"' '"aux0,aux1,aux2"' '"aux0,aux0"' '"aux0, aux0 "' '"aux0,"' '",aux1"' '"AUX0,aux1"' '"aux 0,aux1"' '"aux0;cmd,aux1"' '"aux0/other,aux1"' '"aux0,aux1\n"' null '["aux0","aux1"]'; do
+    reject_configured "invalid custom channels $channels" "{\"zones\":[{\"id\":\"a\",\"name\":\"A\",\"device\":\"/dev/snd/controlC4\",\"channels\":$channels}]}"
+done
+reject_configured 'pair and custom channels together' '{"zones":[{"id":"a","name":"A","device":"/dev/snd/controlC4","channel_pair":"Front left/right","channels":"aux0,aux1"}]}'
+reject_configured 'custom channels without device' '{"zones":[{"id":"a","name":"A","output":"pulse:room","channels":"aux0,aux1"}]}'
+reject_configured 'device and explicit output with custom channels' '{"zones":[{"id":"a","name":"A","device":"/dev/snd/controlC4","output":"pulse:room","channels":"aux0,aux1"}]}'
 printf '\nInvalid settings leave the previous manifest intact\n'
 reject 'malformed JSON' '['
 reject 'concatenated documents' '{} {}'
@@ -106,11 +136,11 @@ reject 'duplicate explicit outputs' '{"zones": [{"id":"a","name":"A","output":"p
 reject_zone 'path traversal ID' '"id":"../state"'
 reject '33 rooms' "$(jq -cn '{zones:[range(0;33) | {id:("room-"+tostring),name:"Room",output:("pulse:room-"+tostring)}]}')"
 reject_zone 'device and output together' '"device":"/dev/snd/controlC4"'
-reject_zone 'pair without device' '"channel_pair":"front"'
+reject_zone 'pair without device' '"channel_pair":"Front left/right"'
 for device in '/dev/snd/pcmC4D0c' '/dev/snd/seq' '/dev/snd/timer' '/tmp/controlC4' '/dev/snd/by-id/../../other' ''; do
     reject "invalid device $device" "$(jq -cn --arg device "$device" '{zones:[{id:"a",name:"A",device:$device}]}')"
 done
-for pair in '"all"' '"stereo"' null 2; do
+for pair in '"all"' '"stereo"' '"front"' '"rear"' '"side"' '"center_sub"' null 2; do
     reject "invalid pair $pair" "{\"zones\":[{\"id\":\"a\",\"name\":\"A\",\"device\":\"/dev/snd/controlC4\",\"channel_pair\":$pair}]}"
 done
 for field in name output; do

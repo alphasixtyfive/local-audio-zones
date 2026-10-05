@@ -1,7 +1,8 @@
+# Modified for Local Audio Zones; upstream attribution is in NOTICE.
 name: Local Audio Zones
 version: "0.1.0"
 slug: local_audio_zones
-description: Independent Music Assistant players for each audio output.
+description: Turn soundcard outputs into separate Music Assistant rooms.
 arch:
   - amd64
   - aarch64
@@ -27,7 +28,8 @@ schema:
   zones:
     - name: str
       device: device(subsystem=sound)?
-      channel_pair: list(front|rear|side|center_sub)?
+      channel_pair: list(Front left/right|Rear left/right|Side left/right|Centre/Subwoofer)?
+      channels: str?
       id: str
       output: str?
       port: int(1024,65535)?

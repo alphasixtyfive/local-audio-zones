@@ -1,16 +1,15 @@
+# Modified for Local Audio Zones; upstream attribution is in NOTICE.
 # Build from pinned upstream source, then apply the documented routing fix.
 # Bump both ARGs together; the SHA check rejects a repointed tag.
 ARG SENDSPIN_CLI_REF=v0.2.0
 ARG SENDSPIN_CLI_SHA=e980128a9c37229cbc28c764e9f2fd65d1c5edb6
 
-# Supervisor passes BUILD_ARCH; plain Docker builds default to amd64.
-# CI can still override BUILD_FROM with the architecture's pinned image.
+# Supervisor and CI pass BUILD_ARCH; plain Docker builds default to amd64.
 ARG BUILD_ARCH=amd64
-ARG BUILD_FROM=base-${BUILD_ARCH}
 
 # debian:trixie-slim, by multi-arch index digest rather than a per-architecture
 # one, so that a cross-build resolves this stage to the target's architecture.
-# Must stay on the same release as BUILD_FROM above: the binary built here is
+# Must stay on the same release as the runtime base: the binary built here is
 # linked against that image's libc.
 FROM debian@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS build
 
@@ -19,12 +18,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ARG SENDSPIN_CLI_REF
 ARG SENDSPIN_CLI_SHA
 
-# PortAudio is deliberately absent: the route it takes to a Linux sound card is
-# ALSA, which this image already has, so it would be a second way to reach the
-# same devices. libpulse-dev and libpipewire-0.3-dev build the two native
-# sound-server backends, which reach the same servers ALSA's plugin PCMs do but
-# not through a plugin -- see the runtime stage below for what that buys and
-# what it costs.
+# Use native ALSA, PulseAudio and PipeWire backends without PortAudio.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         build-essential \
@@ -52,13 +46,7 @@ COPY patches/0001-pulse-pin-named-output.patch /tmp/pulse-pin-named-output.patch
 RUN git apply --check /tmp/pulse-pin-named-output.patch \
     && git apply /tmp/pulse-pin-named-output.patch
 
-# The flags state intent and the greps enforce it; neither does the other's job.
-# Upstream auto-detects every backend, so a flag left off would make this image's
-# shape a property of whatever the build host had installed -- but asking is not
-# getting, and `=ON` is only a request: a missing -dev dependency does not fail
-# the configure step, it drops the backend and carries on. The greps are what
-# turns that into a failed build. They are the only guard in this stage;
-# scripts/smoke_test.sh asserts the same five off the binary that shipped.
+# Upstream silently drops backends with missing dependencies; verify the result.
 RUN cmake -B build \
         -DCMAKE_BUILD_TYPE=Release \
         -DSENDSPIN_CLI_WITH_MDNS=ON \
@@ -89,7 +77,7 @@ RUN core_tag="$(sed -n 's/^set(SENDSPIN_GIT_TAG "\([^"]*\)".*/\1/p' CMakeLists.t
 FROM ghcr.io/home-assistant/amd64-base-debian@sha256:9281ee991c28532ddae10114ac84750f4aca287a496f6e19583f3a750ad5e786 AS base-amd64
 FROM ghcr.io/home-assistant/aarch64-base-debian@sha256:acc61c0ab60cbca176ec0fe4d37278be514a4a6babfc1becde951c99d17e92f0 AS base-aarch64
 
-FROM ${BUILD_FROM}
+FROM base-${BUILD_ARCH}
 
 ARG APP_VERSION=0.1.0
 
@@ -97,47 +85,8 @@ LABEL \
     org.opencontainers.image.version="${APP_VERSION}" \
     org.opencontainers.image.licenses="Apache-2.0"
 
-# libasound2-plugins carries the ALSA-to-Pulse bridge, which is what makes the
-# `default` output work on Home Assistant OS, where /etc/asound.conf routes
-# `default` to Home Assistant's PulseAudio. libstdc++6 is already present in any
-# image with apt, but the player links it, so it is named rather than inherited.
-#
-# pulseaudio-utils is `pactl`, which sendspin-init uses to read the selected
-# sink's level and warn if it is silent. Two packages for that check --
-# libasound2-plugins already brings libpulse0 -- and no Supervisor permission,
-# where the /audio API route would have needed one.
-#
-# What the two native backends buy over reaching the same servers through ALSA's
-# `pulse` and `pipewire` plugin PCMs, which is the route that was already here:
-# `-l` can enumerate the server's sinks and nodes, so `-o` can name one where
-# the plugin route needs PULSE_SINK or an .asoundrc; the host's mixer sees a
-# stream called sendspin-cli rather than one more "ALSA plug-in"; and the
-# playout timing is the server's own. That last one is why this is not cosmetic
-# for this player: through the plugin, snd_pcm_delay() reports the plugin's
-# buffering rather than the server's, and a synchronised multi-room player is
-# exactly the thing that cannot afford a sync figure about the wrong buffer.
-#
-# The native PulseAudio backend costs nothing at runtime -- libpulse0 is already
-# here, brought in above. libpipewire-0.3-0t64 is the whole price of the PipeWire
-# one, and it is not small: it hard-depends on libspa-0.2-modules of the same
-# version, whose own dependencies bring an LV2 host and a resampler with it.
-# Twelve packages in all -- libpipewire-0.3-0t64 and libspa-0.2-modules
-# themselves, then libabsl20240722, libebur128-1, libfftw3-single3, liblilv-0-0,
-# libmysofa1, libserd-0-0, libsord-0-0, libsratom-0-0, libwebrtc-audio-processing-1-3
-# and libzix-0-0 -- for about 16.6 MB, measured as the difference over the set
-# above on debian:trixie-slim. libsndfile1 is a dependency of that set too and
-# is absent from this list only because pulseaudio-utils already brought it.
-#
-# Upstream is clear that PipeWire reaches no host libpulse cannot, since
-# pipewire-pulse is on every PipeWire desktop. What it buys is node selection --
-# pipewire-pulse presents sinks, a compatibility view of the graph rather than
-# the graph -- and no compatibility layer in the audio path at all. The hosts it
-# adds outright are the narrow case: a machine running PipeWire with no
-# pipewire-pulse installed, where a libpulse client finds nothing to connect to.
-#
-# Note the t64 suffix: there is no plain libpipewire-0.3-0 in trixie. Trixie
-# ships PipeWire 1.4.2, well past the 0.3.64 upstream requires for the node
-# targeting that makes `-o pipewire:<node>` name a node rather than be ignored.
+# pactl resolves room routes and reports output state without Supervisor access.
+# ALSA plugins preserve the upstream default-output path on Home Assistant OS.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         avahi-daemon \
@@ -159,6 +108,8 @@ ENV S6_KILL_GRACETIME=2000
 
 COPY --from=build /stage/usr/local/bin/sendspin-cli /usr/bin/sendspin-cli
 COPY --from=build /build-info.txt /usr/share/sendspin-cli/BUILD-INFO.txt
+COPY LICENSE NOTICE HASSCONNECT-LICENSE /usr/share/doc/local-audio-zones/
+COPY licenses/ /usr/share/doc/local-audio-zones/licenses/
 COPY rootfs/ /
 
 # No ENTRYPOINT or CMD: the base image's /init runs s6, which starts the

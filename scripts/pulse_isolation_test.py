@@ -7,6 +7,7 @@ pulseaudio-utils and Python. No host audio socket or sound device is used.
 
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import select
@@ -124,7 +125,7 @@ class Stream(threading.Thread):
 
 
 def main():
-    for executable in ("pulseaudio", "pactl", "sendspin-cli"):
+    for executable in ("pulseaudio", "pactl", "pacat", "parec", "sendspin-cli"):
         if shutil.which(executable) is None:
             raise SystemExit(f"Missing {executable}; use the disposable audio-test image.")
 
@@ -227,7 +228,8 @@ def main():
                 # A null master has no hardware card. Supply that identity only;
                 # module creation, arguments, sink properties and cleanup stay native.
                 if arguments == ("--format=json", "list", "cards"):
-                    return json.dumps([{"index": 41, "properties": {"alsa.card": "7"}}])
+                    return json.dumps([{"index": 41, "properties": {"alsa.card": "7"}},
+                                       {"index": 42, "properties": {"alsa.card": "8"}}])
                 result = pactl(*arguments)
                 if arguments == ("--format=json", "list", "sinks"):
                     sinks = json.loads(result)
@@ -236,6 +238,9 @@ def main():
                             sink.pop("card", None)
                             sink["properties"]["alsa.card"] = "7"
                             sink["description"] = 'Private "USB" café card'
+                        elif sink["name"] == "aux_physical":
+                            sink.pop("card", None)
+                            sink["properties"]["alsa.card"] = "8"
                     return json.dumps(sinks)
                 return result.rstrip("\n")
 
@@ -298,6 +303,65 @@ def main():
             finally:
                 pactl("unload-module", collision)
             print("  ok   native PulseAudio accepts generated stereo routes, descriptions, reuse and cleanup", flush=True)
+
+            channel_map = ",".join("aux" + str(index) for index in range(8))
+            aux_master = pactl("load-module", "module-null-sink", "sink_name=aux_physical",
+                               "rate=48000", "channels=8", "channel_map=" + channel_map).strip()
+            custom_routes = routing.AudioRoutes(pactl=private_pactl, device_resolver=lambda _: 8,
+                                                registry=work / "custom-routes.json")
+            custom = {"id": "custom", "name": "Custom room", "device": "/dev/snd/controlC8",
+                      "channels": ["aux5", "aux4"]}
+            try:
+                result = custom_routes.resolve([custom])
+                if custom_routes.resolve([custom]) != result:
+                    raise AssertionError("custom channels did not reuse their exact native route")
+                owned = json.loads((work / "custom-routes.json").read_text())
+                if len(owned) != 1 or "master_channel_map=aux5,aux4 remix=no" not in owned[0]["argument"]:
+                    raise AssertionError("native route lost the custom channel order")
+                capture_path = work / "custom-channel-capture.pcm"
+                with capture_path.open("wb") as capture:
+                    recorder = subprocess.Popen(
+                        ["parec", "--raw", "--format=s16le", "--rate=48000", "--channels=8",
+                         "--latency-msec=20", "--channel-map=" + channel_map, "--device=aux_physical.monitor"],
+                        env=environment, stdout=capture, stderr=subprocess.PIPE,
+                    )
+                    try:
+                        time.sleep(0.2)
+                        tone = b"".join(struct.pack("<hh", int(5000 * math.sin(2 * math.pi * 440 * n / 48000)),
+                                                   int(5000 * math.sin(2 * math.pi * 1100 * n / 48000)))
+                                        for n in range(28800))
+                        subprocess.run(["pacat", "--playback", "--raw", "--format=s16le", "--rate=48000",
+                                        "--latency-msec=20", "--channels=2", "--channel-map=front-left,front-right",
+                                        "--device=local_audio_zones_custom"],
+                                       env=environment, input=tone, capture_output=True, check=True, timeout=5)
+                        time.sleep(0.2)
+                    finally:
+                        recorder.terminate()
+                        recorder.communicate(timeout=3)
+                captured = capture_path.read_bytes()
+                frames = list(struct.iter_unpack("<8h", captured[:len(captured) // 16 * 16]))
+                if not frames:
+                    raise AssertionError("custom channel monitor captured no audio")
+                power = [sum(frame[channel] ** 2 for frame in frames) for channel in range(8)]
+                print(f"  custom capture: {len(frames)} frames; channel energy {power}", flush=True)
+                if min(power[4], power[5]) < 1_000_000 or any(power[channel] > max(power) * 0.001
+                                                            for channel in (0, 1, 2, 3, 6, 7)):
+                    raise AssertionError(f"custom aux4/aux5 audio missing or misrouted: energy {power}")
+                def magnitude(channel, frequency):
+                    real = sum(frame[channel] * math.cos(2 * math.pi * frequency * n / 48000)
+                               for n, frame in enumerate(frames))
+                    imaginary = sum(frame[channel] * math.sin(2 * math.pi * frequency * n / 48000)
+                                    for n, frame in enumerate(frames))
+                    return math.hypot(real, imaginary)
+                if magnitude(5, 440) < 5 * magnitude(5, 1100) or magnitude(4, 1100) < 5 * magnitude(4, 440):
+                    raise AssertionError("custom channels reversed left/right source order")
+                custom_routes.cleanup()
+                if "local_audio_zones_custom" in sink_names() or "aux_physical" not in sink_names():
+                    raise AssertionError("custom cleanup retained its route or removed its master")
+                print("  ok   native custom aux5/aux4 route preserves order, isolates audio and reuses safely", flush=True)
+            finally:
+                custom_routes.cleanup()
+                pactl("unload-module", aux_master)
 
         try:
             with pulse_log.open("w") as log:

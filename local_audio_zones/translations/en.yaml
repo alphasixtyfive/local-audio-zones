@@ -10,16 +10,21 @@ configuration:
         name: Room name
       device:
         name: Soundcard device
-        description: Choose a soundcard control or playback device. Prefer /dev/snd/by-id/ when available.
+        description: Choose a soundcard control or playback device. Prefer /dev/snd/by-id/; use /dev/snd/by-path/ for identical cards on fixed ports.
       channel_pair:
         name: Output pair
         description: >-
-          Defaults to front. The app checks the pair against the card's active channels.
+          Defaults to Front left/right. Checked against the selected card's active channels.
+      channels:
+        name: Custom channels (advanced)
+        description: >-
+          Two channel names, such as aux0,aux1. Leave Output pair unset.
+          The Log tab lists the selected card's available channels.
       output:
         name: Explicit output (advanced)
         description: >-
-          Alternative to Sound device. Use a native player output such as
-          pulse:my_stereo_sink. Leave Soundcard device and Output pair unset.
+          Alternative to Soundcard device. Use a native player output such as
+          pulse:my_stereo_sink. Leave Soundcard device, Output pair and Custom channels unset.
       port:
         name: Listen port
         description: Must be unique; defaults to 8928 plus the room position.

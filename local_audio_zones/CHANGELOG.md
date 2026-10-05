@@ -3,9 +3,10 @@
 ## 0.1.0
 
 - Independent Music Assistant players for up to 32 rooms.
-- Native Home Assistant configuration with detected sound devices, stereo pairs
-  and optional per-room player settings.
+- Native Home Assistant configuration with detected sound devices, standard or custom
+  stereo pairs and optional per-room player settings.
 - Reuse existing stereo outputs or create standard PulseAudio remaps without
   changing hardware profiles, rates or levels.
 - Separate saved state, process recovery and health checks for each room.
+- Recover app-owned routes after an interrupted shutdown.
 - Native Sendspin playback, with named outputs kept on their selected sink.

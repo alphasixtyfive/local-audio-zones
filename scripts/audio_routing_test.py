@@ -8,6 +8,7 @@ from pathlib import Path
 import shlex
 import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "local_audio_zones/rootfs/usr/lib/sendspin-cli/audio_routes.py"
@@ -93,6 +94,13 @@ def room(identifier="study", pair="front", device="/dev/snd/controlC4"):
             "buffer_ms": "250", "hook_start": "", "hook_stop": ""}
 
 
+def custom_room(identifier, channels, device="/dev/snd/controlC4"):
+    player = room(identifier, device=device)
+    player.pop("channel_pair")
+    player["channels"] = channels
+    return player
+
+
 class RoutingTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="audio-routing-")
@@ -100,7 +108,9 @@ class RoutingTests(unittest.TestCase):
         self.registry = Path(self.temporary.name) / "owned.json"
         self.pulse = PulseFixture()
         devices = {"/dev/snd/controlC4": 4, "/dev/snd/controlC7": 7,
-                   "/dev/snd/by-id/usb-card-a": 4, "/dev/snd/pcmC4D0p": 4}
+                   "/dev/snd/by-id/usb-card-a": 4, "/dev/snd/pcmC4D0p": 4,
+                   "/dev/snd/by-path/pci-0000:00:14.0-usb-0:1:1.0": 4,
+                   "/dev/snd/by-path/pci-0000:00:14.0-usb-0:2:1.0": 7}
         self.routes = audio_routes.AudioRoutes(pactl=self.pulse,
                                              device_resolver=devices.__getitem__,
                                              registry=self.registry)
@@ -169,6 +179,92 @@ class RoutingTests(unittest.TestCase):
             sink = next(sink for sink in self.pulse.sinks if sink["owner_module"] == module["index"])
             self.assertEqual(sink["description"], "local_audio_zones_" + pair)
         self.assertEqual(len(json.loads(self.registry.read_text())), 4)
+
+    def test_custom_aux_channels_route_in_the_requested_order(self):
+        self.pulse.sinks[0]["channel_map"] = "aux0,aux1,aux2,aux3,aux4,aux5,aux6,aux7"
+        player = custom_room("custom", ["aux5", "aux4"])
+        result = self.routes.resolve([player])[0]
+        self.assertEqual(result["output"], "pulse:local_audio_zones_custom")
+        self.assertNotIn("channels", result)
+        self.assertNotIn("device", result)
+        self.assertEqual(player["channels"], ["aux5", "aux4"])
+        self.assertIn("master_channel_map=aux5,aux4 remix=no", self.pulse.modules[0]["argument"])
+
+    def test_custom_channels_reuse_an_existing_exact_remap(self):
+        self.pulse.remap(channels="front-right,rear-left")
+        result = self.routes.resolve([custom_room("custom", ["front-right", "rear-left"])])[0]
+        self.assertEqual(result["output"], "pulse:existing_front")
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_partial_physical_channel_overlap_is_rejected_before_creation(self):
+        players = [room(), custom_room("custom", ["rear-right", "front-left"])]
+        for ordered in (players, list(reversed(players))):
+            with self.subTest(order=[player["id"] for player in ordered]):
+                with self.assertRaisesRegex(audio_routes.RoutingError, "front-left"):
+                    self.routes.resolve(ordered)
+                self.assertEqual(self.pulse.mutations(), [])
+
+    def test_by_path_distinguishes_identical_serial_soundcards(self):
+        for card in self.pulse.cards:
+            card["properties"]["device.serial"] = "identical-usb-card"
+        players = [room(device="/dev/snd/by-path/pci-0000:00:14.0-usb-0:1:1.0"),
+                   room("second", device="/dev/snd/by-path/pci-0000:00:14.0-usb-0:2:1.0")]
+        self.routes.resolve(players)
+        self.assertIn("master=usb_card_a ", self.pulse.modules[0]["argument"])
+        self.assertIn("master=usb_card_b ", self.pulse.modules[1]["argument"])
+
+    def test_by_path_and_control_alias_cannot_share_physical_channels(self):
+        alias = room("alias", device="/dev/snd/by-path/pci-0000:00:14.0-usb-0:1:1.0")
+        for players in ([alias, room()], [room(), alias]):
+            with self.subTest(order=[player["id"] for player in players]):
+                with self.assertRaisesRegex(audio_routes.RoutingError, "share soundcard channel"):
+                    self.routes.resolve(players)
+                self.assertEqual(self.pulse.mutations(), [])
+
+    def test_device_alias_resolution_requires_a_sound_character_device(self):
+        alias = "/dev/snd/by-path/pci-0000:00:14.0-usb-0:1:1.0"
+        for target, character, expected in (("/dev/snd/controlC4", True, 4),
+                                            ("/dev/snd/pcmC4D0p", True, 4),
+                                            ("/dev/snd/controlC4", False, None),
+                                            ("/dev/snd/pcmC4D0c", True, None),
+                                            ("/dev/null", True, None)):
+            resolved = MagicMock()
+            resolved.__str__.return_value = target
+            resolved.is_char_device.return_value = character
+            with self.subTest(target=target, character=character), \
+                    patch.object(Path, "resolve", return_value=resolved):
+                if expected is None:
+                    with self.assertRaises(audio_routes.RoutingError):
+                        audio_routes.device_card(alias)
+                else:
+                    self.assertEqual(audio_routes.device_card(alias), expected)
+
+    def test_custom_channels_report_the_actual_available_map(self):
+        self.pulse.sinks[0]["channel_map"] = "aux0,aux1,aux2,aux3"
+        with self.assertRaisesRegex(audio_routes.RoutingError, "available channels: aux0, aux1, aux2, aux3"):
+            self.routes.resolve([custom_room("custom", ["aux4", "aux5"])])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_explicit_remap_overlapping_a_selected_device_is_rejected(self):
+        self.pulse.remap("expert_route", channels="front-left,rear-right")
+        explicit = {"id": "expert", "name": "Expert", "output": "pulse:expert_route"}
+        with self.assertRaisesRegex(audio_routes.RoutingError, "front-left"):
+            self.routes.resolve([room(), explicit])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_explicit_nonoverlapping_host_remap_is_preserved(self):
+        self.pulse.remap("expert_route", channels="rear-left,rear-right")
+        explicit = {"id": "expert", "name": "Expert", "output": "pulse:expert_route"}
+        result = self.routes.resolve([room(), explicit])
+        self.assertEqual(result[1], explicit)
+        self.routes.cleanup()
+        self.assertEqual([module["index"] for module in self.pulse.modules], [50])
+
+    def test_explicit_physical_master_cannot_overlap_a_selected_device(self):
+        explicit = {"id": "expert", "name": "Expert", "output": "pulse:usb_card_a"}
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.resolve([room(), explicit])
+        self.assertEqual(self.pulse.mutations(), [])
 
     def test_second_device_uses_its_own_pulse_card_index(self):
         self.routes.resolve([room(device="/dev/snd/controlC7")])
@@ -301,6 +397,50 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual([module["index"] for module in self.pulse.modules], [50])
         self.assertEqual(json.loads(self.registry.read_text()), [])
         self.routes.cleanup()
+
+    def test_container_replacement_preserves_owned_routes_for_cleanup(self):
+        self.pulse.remap("host_rear", channels="rear-left,rear-right")
+        first = self.routes.resolve([room()])
+        replacement = audio_routes.AudioRoutes(pactl=self.pulse, device_resolver=lambda _: 4,
+                                               registry=self.registry)
+        self.assertEqual(replacement.resolve([room()]), first)
+        self.assertEqual(len([call for call in self.pulse.calls if call[0] == "load-module"]), 1)
+        replacement.cleanup()
+        self.assertEqual([module["index"] for module in self.pulse.modules], [50])
+        self.assertEqual(json.loads(self.registry.read_text()), [])
+
+    def test_interrupted_cleanup_is_completed_after_container_replacement(self):
+        self.routes.resolve([room("rear", "rear"), room("side", "side")])
+        self.pulse.fail_unload = {100}
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.cleanup()
+        self.assertEqual([record["index"] for record in json.loads(self.registry.read_text())], [100])
+        replacement = audio_routes.AudioRoutes(pactl=self.pulse, device_resolver=lambda _: 4,
+                                               registry=self.registry)
+        self.pulse.fail_unload.clear()
+        replacement.cleanup()
+        self.assertEqual(self.pulse.modules, [])
+        self.assertEqual(json.loads(self.registry.read_text()), [])
+
+    def test_cold_start_cleanup_allows_changed_channels_for_the_same_room(self):
+        self.routes.resolve([room()])
+        replacement = audio_routes.AudioRoutes(pactl=self.pulse, device_resolver=lambda _: 4,
+                                               registry=self.registry)
+        replacement.cleanup()
+        result = replacement.resolve([room(pair="rear")])
+        self.assertEqual(result[0]["output"], "pulse:local_audio_zones_study")
+        self.assertEqual(len(self.pulse.modules), 1)
+        self.assertIn("master_channel_map=rear-left,rear-right", self.pulse.modules[0]["argument"])
+
+    def test_cold_start_cleanup_removes_owned_routes_when_all_rooms_are_deleted(self):
+        self.pulse.remap("host_rear", channels="rear-left,rear-right")
+        self.routes.resolve([room()])
+        replacement = audio_routes.AudioRoutes(pactl=self.pulse, device_resolver=lambda _: 4,
+                                               registry=self.registry)
+        replacement.cleanup()
+        self.assertEqual(replacement.resolve([]), [])
+        self.assertEqual([module["index"] for module in self.pulse.modules], [50])
+        self.assertEqual(json.loads(self.registry.read_text()), [])
 
     def test_recycled_module_id_is_not_unloaded(self):
         self.routes.resolve([room()])

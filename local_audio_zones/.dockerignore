@@ -2,4 +2,8 @@
 *
 !rootfs
 !patches
+!LICENSE
+!NOTICE
+!HASSCONNECT-LICENSE
+!licenses
 **/__pycache__

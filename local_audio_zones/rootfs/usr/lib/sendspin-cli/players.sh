@@ -1,3 +1,4 @@
+# Modified for Local Audio Zones; upstream attribution is in NOTICE.
 # shellcheck shell=bash
 
 sendspin::player_paths() {
@@ -14,7 +15,7 @@ sendspin::render_player() {
         setting("name"; .name),
         setting("output"; .output),
         setting("log-level"; .log_level),
-        "manufacturer = Music Assistant",
+        "manufacturer = Local Audio Zones",
         "product-name = Local Audio Zones",
         setting("port"; (.port | tostring)),
         setting("buffer-ms"; .buffer_ms),

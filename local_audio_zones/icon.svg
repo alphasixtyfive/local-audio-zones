@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>Local Audio Zones</title>
+  <path d="M109 32Q128 16 147 32L220 94Q234 106 234 125V200Q234 232 202 232H54Q22 232 22 200V125Q22 106 36 94Z" fill="#18BCF2"/>
+  <g fill="#fff">
+    <rect x="69" y="103" width="46" height="52" rx="8"/>
+    <rect x="141" y="103" width="46" height="52" rx="8"/>
+    <rect x="69" y="171" width="46" height="52" rx="8"/>
+    <rect x="141" y="171" width="46" height="52" rx="8"/>
+  </g>
+  <g fill="#18BCF2">
+    <circle cx="92" cy="117" r="4"/>
+    <circle cx="164" cy="117" r="4"/>
+    <circle cx="92" cy="185" r="4"/>
+    <circle cx="164" cy="185" r="4"/>
+    <circle cx="92" cy="137" r="10"/>
+    <circle cx="164" cy="137" r="10"/>
+    <circle cx="92" cy="205" r="10"/>
+    <circle cx="164" cy="205" r="10"/>
+  </g>
+</svg>

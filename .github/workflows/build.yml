@@ -79,12 +79,9 @@ jobs:
         include:
           - arch: amd64
             runner: ubuntu-24.04
-            # Keep architecture base pins aligned with the Dockerfile and release workflow.
-            base: ghcr.io/home-assistant/amd64-base-debian@sha256:9281ee991c28532ddae10114ac84750f4aca287a496f6e19583f3a750ad5e786
             expect_arch: amd64
           - arch: aarch64
             runner: ubuntu-24.04-arm
-            base: ghcr.io/home-assistant/aarch64-base-debian@sha256:acc61c0ab60cbca176ec0fe4d37278be514a4a6babfc1becde951c99d17e92f0
             expect_arch: arm64
     env:
       IMAGE: local-audio:ci
@@ -92,9 +89,7 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build the image
-        env:
-          BASE: ${{ matrix.base }}
-        run: docker build --build-arg "BUILD_FROM=$BASE" --tag "$IMAGE" local_audio_zones
+        run: docker build --build-arg "BUILD_ARCH=${{ matrix.arch }}" --tag "$IMAGE" local_audio_zones
 
       - name: Check the image is the architecture this leg builds for
         env:
@@ -103,7 +98,7 @@ jobs:
           arch="$(docker image inspect --format '{{.Architecture}}' "$IMAGE")"
           echo "image architecture: $arch"
           [ "$arch" = "$EXPECT_ARCH" ] || {
-            echo "::error::built a $arch image on the $EXPECT_ARCH leg -- check BUILD_FROM"
+            echo "::error::built a $arch image on the $EXPECT_ARCH leg -- check BUILD_ARCH"
             exit 1
           }
       - name: Make sure apparmor_parser is installed

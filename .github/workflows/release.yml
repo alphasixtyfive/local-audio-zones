@@ -68,11 +68,9 @@ jobs:
         include:
           - arch: amd64
             runner: ubuntu-24.04
-            base: ghcr.io/home-assistant/amd64-base-debian@sha256:9281ee991c28532ddae10114ac84750f4aca287a496f6e19583f3a750ad5e786
             expect_arch: amd64
           - arch: aarch64
             runner: ubuntu-24.04-arm
-            base: ghcr.io/home-assistant/aarch64-base-debian@sha256:acc61c0ab60cbca176ec0fe4d37278be514a4a6babfc1becde951c99d17e92f0
             expect_arch: arm64
     env:
       REPO: ghcr.io/${{ github.repository }}
@@ -96,11 +94,10 @@ jobs:
       - name: Build and push this architecture by digest
         id: push
         env:
-          BASE: ${{ matrix.base }}
           APP_VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           docker buildx build \
-            --build-arg "BUILD_FROM=$BASE" \
+            --build-arg "BUILD_ARCH=${{ matrix.arch }}" \
             --build-arg "APP_VERSION=$APP_VERSION" \
             --provenance=false \
             --sbom=false \
@@ -124,7 +121,7 @@ jobs:
           arch="$(docker image inspect --format '{{.Architecture}}' "$REPO@$DIGEST")"
           echo "image architecture: $arch"
           [ "$arch" = "$EXPECT_ARCH" ] || {
-            echo "::error::pushed a $arch image on the $EXPECT_ARCH leg -- check BUILD_FROM"
+            echo "::error::pushed a $arch image on the $EXPECT_ARCH leg -- check BUILD_ARCH"
             exit 1
           }
 

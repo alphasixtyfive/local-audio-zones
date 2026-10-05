@@ -1,9 +1,8 @@
 # Local Audio Zones
 
-A Home Assistant app that gives each stereo output its own Music Assistant
-player. Configure rooms in Home Assistant's native app settings; control
-playback, volume and groups in Music Assistant. Each room has separate saved
-state and an independently supervised native Sendspin player.
+Turn local soundcard outputs into rooms in Music Assistant. Select a soundcard
+and stereo output for each room in Home Assistant, then control playback,
+volume and groups in Music Assistant.
 
 ## Install
 
@@ -14,13 +13,18 @@ state and an independently supervised native Sendspin player.
    Select each detected sound device and stereo pair, then save and restart.
 
 See the [app guide](local_audio_zones/README.md) for the native controls and
-[output routing](docs/pulseaudio-zones.md) for hardware requirements.
+[output routing](docs/pulseaudio-zones.md) and
+[hardware support](docs/audio-hardware-support.md) for hardware requirements.
 Music Assistant and the app need working mDNS on the same local network.
+
+See [publishing](docs/publishing.md) for the community repository and image plan.
 
 ## Room settings
 
-Choose a `/dev/snd/by-id/` soundcard when available and one of `front`, `rear`,
-`side` or `center_sub`. Existing stereo remaps are reused; otherwise the app
+Choose a `/dev/snd/by-id/` soundcard when available and Front left/right, Rear left/right,
+Side left/right or Centre/Subwoofer. For other layouts, leave Output pair unset
+and enter two distinct names in Custom channels, such as `aux0,aux1`. The Log
+tab reports the card's actual available channels. Existing stereo remaps are reused; otherwise the app
 creates a standard PulseAudio remap with `remix=no`. It does not change card
 profiles, sample rates or hardware volume. An explicit output such as
 `pulse:my_stereo_sink` is also supported instead of a sound-device selection.
@@ -36,7 +40,7 @@ profiles, sample rates or hardware volume. An explicit output such as
 
 Up to 32 rooms are supported. Log level, server, buffer and commands inherit the
 app settings unless overridden. An explicit empty server or command clears its
-inherited value. Invalid IDs, duplicate ports, unsupported pairs and ambiguous
+inherited value. Invalid IDs, duplicate ports, unsupported or overlapping channels and ambiguous
 card mappings are rejected before players start. No rooms means the app waits
 for configuration without advertising an extra player.
 
@@ -68,3 +72,7 @@ pinned to `e980128a9c37229cbc28c764e9f2fd65d1c5edb6`. One
 `PA_STREAM_DONT_MOVE` flag to keep named room outputs from moving to another
 sink after device loss. Upstream notices and the Apache-2.0 [license](LICENSE)
 are retained.
+
+The logo adapts [HASSConnect](https://github.com/alphasixtyfive/HASSConnect)'s
+house artwork. See [NOTICE](local_audio_zones/NOTICE) for origins and licenses.
+This is an independently maintained community app.
