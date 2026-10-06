@@ -20,6 +20,24 @@ physical relay testing. DSD TECH commands require an `OK` acknowledgement;
 KMtronic and LCUS report a successful command write, not physical contact
 readback. HID, FTDI bitbang, Modbus and CasaTunes trigger cards are not supported.
 
+## Home Assistant alternative
+
+If the amplifier's relay already appears as a Home Assistant switch, use
+[Music Assistant's Home Assistant plugin](https://www.music-assistant.io/ha-plugin/#linking-home-assistant-entities-to-player-controls).
+Select the switch under power controls, then select it in the player's
+**Player Controls** settings. No USB trigger configuration is needed in this app.
+
+For an amplifier shared by several rooms, use one Home Assistant automation
+to own the switch: turn it on when any assigned room starts playing and off
+after all assigned rooms have stopped for the standby delay. Treat unavailable
+room states as unknown, not stopped. Do not assign the same physical switch
+independently to every player's power control; one room could turn it off
+while another is still playing. Use either this automation or the app's USB
+controller for a relay, so only one system owns it.
+
+This works with any relay integration that exposes an on/off switch in Home
+Assistant. Hardware-specific commands stay in that integration.
+
 ## Configure
 
 1. On Proxmox, pass the relay's USB device into the Home Assistant VM. Keep it
@@ -36,6 +54,15 @@ use `/dev/serial/by-path/` in **Edit in YAML** and keep physical ports fixed.
 Numeric `/dev/ttyUSB0` selections can change after a reboot. Use one device
 path consistently for every channel on the same board. The app never scans
 serial ports or guesses a relay protocol.
+
+Device selections are not tied to a particular chipset or Linux device name.
+Any serial device or link under `/dev` can be configured if it is exposed to
+the app. The protocol must match the relay. Standby delay accepts any
+nonnegative whole number of seconds; there is no fixed relay-count ceiling.
+
+Room assignments and device paths come from configuration. The controller has
+no room, card or relay-brand special cases. Protocol definitions live in one
+small module; adding a supported wire format does not change playback logic.
 
 ```yaml
 usb_relays:
