@@ -1,13 +1,13 @@
 # Modified for Local Audio Zones; upstream attribution is in NOTICE.
 name: Local Audio Zones
-version: "0.1.4"
+version: "0.1.0"
 slug: local_audio_zones
 url: https://github.com/alphasixtyfive/local-audio-zones
+image: ghcr.io/alphasixtyfive/local-audio-zones
 description: Separate Music Assistant rooms from your soundcard outputs.
 arch:
   - amd64
   - aarch64
-# First release; experimental while broader hardware testing continues.
 stage: experimental
 # Advertise before Home Assistant and Music Assistant start.
 startup: services
