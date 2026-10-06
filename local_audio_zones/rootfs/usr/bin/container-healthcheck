@@ -15,6 +15,13 @@ while IFS= read -r id; do
     fi
 done <<< "${ids}"
 
+if jq -e '(.usb_relays // []) | length > 0' /data/options.json > /dev/null; then
+    if [ "$(s6-svstat -o up "${SENDSPIN_RUN_DIR}/services/_usb-triggers")" != true ]; then
+        sendspin::log 'The USB amplifier trigger service is not running.'
+        exit 1
+    fi
+fi
+
 decision=$(sendspin::daemon_decision)
 if [ "${decision}" = yes ]; then
     if [ "$(s6-svstat -o up /run/service/avahi)" != true ]; then

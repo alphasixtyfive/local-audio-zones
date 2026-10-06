@@ -79,7 +79,7 @@ FROM ghcr.io/home-assistant/aarch64-base-debian@sha256:acc61c0ab60cbca176ec0fe4d
 
 FROM base-${BUILD_ARCH}
 
-ARG APP_VERSION=0.1.0
+ARG APP_VERSION=0.1.1
 
 LABEL \
     org.opencontainers.image.source="https://github.com/alphasixtyfive/local-audio-zones" \
@@ -99,6 +99,7 @@ RUN apt-get update \
         libstdc++6 \
         pulseaudio-utils \
         python3 \
+        python3-serial \
     && rm -rf /var/lib/apt/lists/*
 
 # Stop the container if native configuration or startup fails.

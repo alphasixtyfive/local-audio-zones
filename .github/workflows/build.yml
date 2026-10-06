@@ -35,6 +35,7 @@ jobs:
             local_audio_zones/rootfs/usr/bin/container-healthcheck \
             local_audio_zones/rootfs/usr/lib/sendspin-cli/decide-daemons \
             local_audio_zones/rootfs/usr/lib/sendspin-cli/player-run \
+            local_audio_zones/rootfs/usr/lib/sendspin-cli/usb-trigger-run \
             local_audio_zones/rootfs/etc/s6-overlay/s6-rc.d/*/run \
             local_audio_zones/rootfs/etc/s6-overlay/s6-rc.d/*/finish
           shellcheck -x --source-path=SCRIPTDIR scripts/*.sh
@@ -125,6 +126,15 @@ jobs:
           docker run --rm --network none --entrypoint python3 \
             --env PYTHONDONTWRITEBYTECODE=1 --volume "$PWD:/repo:ro" \
             "$IMAGE" /repo/scripts/audio_routing_test.py
+
+      - name: Test USB amplifier triggers
+        run: |
+          docker run --rm --network none --entrypoint python3 \
+            --env PYTHONDONTWRITEBYTECODE=1 --volume "$PWD:/repo:ro" \
+            "$IMAGE" /repo/scripts/usb_triggers_test.py
+
+      - name: Test USB trigger supervision
+        run: scripts/usb_trigger_service_test.sh "$IMAGE"
 
       - name: Test named PulseAudio output isolation
         run: |

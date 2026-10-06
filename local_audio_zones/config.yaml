@@ -1,6 +1,6 @@
 # Modified for Local Audio Zones; upstream attribution is in NOTICE.
 name: Local Audio Zones
-version: "0.1.0"
+version: "0.1.1"
 slug: local_audio_zones
 url: https://github.com/alphasixtyfive/local-audio-zones
 description: Turn soundcard outputs into separate Music Assistant rooms.
@@ -17,8 +17,11 @@ init: false
 host_network: true
 # Use the Home Assistant OS PulseAudio server.
 audio: true
+# Expose serial devices; relay commands use only explicitly selected ports.
+uart: true
 options:
   zones: []
+  usb_relays: []
 # Optional room values inherit app settings; unset app values use CLI defaults.
 schema:
   log_level: list(debug|info|warning|error)?
@@ -26,6 +29,14 @@ schema:
   buffer_ms: int(10,2000)?
   hook_start: str?
   hook_stop: str?
+  usb_relays:
+    - name: str
+      device: device(subsystem=tty)
+      protocol: list(DSD TECH SH-UR01A|KMtronic|LCUS)
+      channel: int(1,8)?
+      zones:
+        - str
+      off_delay: int(0,3600)?
   zones:
     - name: str
       device: device(subsystem=sound)?

@@ -1,4 +1,25 @@
 configuration:
+  usb_relays:
+    name: Amplifier triggers
+    description: Optional USB serial relay channels. Assign player IDs, save and restart.
+    fields:
+      name:
+        name: Amplifier name
+      device:
+        name: USB relay device
+        description: Select only the relay port. Prefer /dev/serial/by-id/; use by-path for identical devices on fixed ports.
+      protocol:
+        name: Relay model
+        description: Match the board's documented protocol. The USB chipset does not identify the relay model.
+      channel:
+        name: Relay channel
+        description: Defaults to 1. DSD TECH and KMtronic use channel 1; LCUS supports 1 to 8.
+      zones:
+        name: Player IDs
+        description: Any listed room receiving audio keeps this amplifier on. Use the IDs from Rooms.
+      off_delay:
+        name: Standby delay
+        description: Seconds after all assigned rooms stop receiving audio, from 0 to 3600. Defaults to 60.
   zones:
     name: Rooms
     description: Add one player per stereo output. Save and restart to apply changes.

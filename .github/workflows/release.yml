@@ -137,6 +137,19 @@ jobs:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: scripts/smoke_test.sh "$REPO@$DIGEST" --require-apparmor
 
+      - name: Test USB amplifier triggers
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          docker run --rm --network none --entrypoint python3 \
+            --env PYTHONDONTWRITEBYTECODE=1 --volume "$PWD:/repo:ro" \
+            "$REPO@$DIGEST" /repo/scripts/usb_triggers_test.py
+
+      - name: Test USB trigger supervision
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: scripts/usb_trigger_service_test.sh "$REPO@$DIGEST"
+
       - name: Record the digest for the manifest job
         env:
           DIGEST: ${{ steps.push.outputs.digest }}

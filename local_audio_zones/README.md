@@ -53,3 +53,22 @@ player.
 Home Assistant also shows a global Audio panel because the app uses its managed
 PulseAudio connection. That panel cannot be hidden through app configuration.
 Leave its input and output at Default; room selections control routing.
+
+## Amplifier triggers
+
+Optionally add USB serial relays under **Amplifier triggers**. Select the relay
+device and model, then list the Player IDs of the rooms using that amplifier.
+Any receiving room keeps it on; all rooms must be idle for the standby delay
+before it switches off. No relay entries means the feature is disabled.
+
+Supported protocols are DSD TECH SH-UR01A, KMtronic one-channel and LCUS binary.
+Use a stable serial path and select only the relay device, never the Zigbee port.
+The USB chipset does not determine its protocol. Save and restart after changes.
+
+Missing playback status holds the current demand. Relay failures are logged and
+retried without stopping audio. The app attempts to switch off configured
+channels on orderly shutdown. Physical relay testing is still required;
+automatic wake-up can miss initial audio while the amplifier starts.
+
+See the [amplifier guide](https://github.com/alphasixtyfive/local-audio-zones/blob/main/docs/amplifier-triggers.md)
+for wiring, supported hardware and configuration examples.
