@@ -21,7 +21,7 @@ sendspin::read_options() {
             else error(key + " must be a " + expected) end;
         if length != 1 or (.[0] | type) != "object" then
             error("options must contain one JSON object") else .[0] end
-        | if (keys - ["zones", "log_level", "server", "buffer_ms", "hook_start", "hook_stop"] | length) > 0 then
+        | if (keys - ["zones", "usb_relays", "log_level", "server", "buffer_ms", "hook_start", "hook_stop"] | length) > 0 then
             error("unknown app option") else . end
         | optional_type("log_level"; "string")
         | optional_type("server"; "string")
@@ -61,6 +61,11 @@ sendspin::prepare_players() {
         return 1
     fi
 
+    if ! python3 "${BASH_SOURCE[0]%/*}/usb_triggers.py" validate --players "${temporary}"; then
+        rm -f "${temporary}"
+        return 1
+    fi
+
     # A previous container may have stopped before releasing its host remaps.
     if ! python3 "${BASH_SOURCE[0]%/*}/audio_routes.py" cleanup; then
         rm -f "${temporary}"
@@ -85,8 +90,10 @@ sendspin::prepare_players() {
 }
 
 sendspin::decide_daemons() {
+    local configured
     sendspin::read_options || return 1
-    sendspin::configured_players > /dev/null || return 1
+    configured=$(sendspin::configured_players) || return 1
+    python3 "${BASH_SOURCE[0]%/*}/usb_triggers.py" validate --players <(printf '%s\n' "${configured}") || return 1
     mkdir -p "${SENDSPIN_RUN_DIR}"
     if jq -e 'length == 0' <<< "${SENDSPIN_ZONES}" > /dev/null; then
         printf 'no\n' > "${SENDSPIN_DAEMON_DECISION}"

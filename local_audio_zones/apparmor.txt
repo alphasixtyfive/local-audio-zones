@@ -25,6 +25,7 @@ profile local_audio_zones flags=(attach_disconnected,mediate_deleted) {
   /usr/lib/sendspin-cli/** r,
   /usr/lib/sendspin-cli/decide-daemons ix,
   /usr/lib/sendspin-cli/player-run ix,
+  /usr/lib/sendspin-cli/usb-trigger-run ix,
 
   network unix stream,
   network unix dgram,

@@ -34,3 +34,9 @@ in HASSCONNECT-LICENSE. https://github.com/alphasixtyfive/HASSConnect
 
 Local Audio Zones is independently maintained. Home Assistant and Music
 Assistant names identify compatibility and upstream origin, not endorsement.
+
+The USB relay controller is an independent implementation. Its LCUS protocol
+and shared-amplifier behaviour were checked against Multi-Room Audio's .NET
+implementation (MIT, Copyright (c) 2025 Squeezelite Multi-Room Docker Controller).
+No .NET implementation code is included.
+https://github.com/chrisuthe/Multi-SendSpin-Player-Container

@@ -16,13 +16,17 @@ Assistant handles playback, volume and groups.
 3. Add your rooms in **Configuration**, save, then restart the app.
 
 Music Assistant and the app need working mDNS on the same local network.
-Version 0.1.0 is experimental.
+Version 0.1.1 is experimental.
 
 ## Configuration
 
 Select a detected soundcard and an output pair for each room. Custom channel
 pairs and existing stereo outputs are also supported. Keep each room's player
 ID when renaming it.
+
+Optional USB serial relays can switch an amplifier's 12 V trigger. Select the
+relay device and model, then assign the rooms that use that amplifier. See the
+[amplifier guide](docs/amplifier-triggers.md) for supported boards and wiring.
 
 The app checks channel availability and conflicts before starting. It leaves
 hardware profiles, sample rates and output levels alone.

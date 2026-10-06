@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+- Optional USB serial amplifier triggers in native app settings.
+- DSD TECH SH-UR01A, KMtronic one-channel and LCUS binary protocols.
+- Shared amplifier assignments, delayed standby and USB reconnection.
+- Validate relay devices, channels and player assignments before startup.
+
 ## 0.1.0
 
 - Independent Music Assistant players for up to 32 rooms.
