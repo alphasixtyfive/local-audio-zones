@@ -36,15 +36,16 @@ def pactl(*args):
     return result.stdout.rstrip("\n")
 
 
-def device_card(device):
+def device_endpoint(device):
+    """Return the ALSA card and, for a playback node, its selected PCM number."""
     try:
         path = Path(device).resolve(strict=True)
     except OSError as error:
         raise RoutingError("Selected sound device is unavailable: " + device) from error
-    match = re.fullmatch(r"/dev/snd/(?:controlC|pcmC)([0-9]+)(?:D[0-9]+p)?", str(path))
+    match = re.fullmatch(r"/dev/snd/(?:controlC([0-9]+)|pcmC([0-9]+)D([0-9]+)p)", str(path))
     if not match or not path.is_char_device():
         raise RoutingError("Select a soundcard control or playback device, not a capture, sequencer or timer device")
-    return int(match[1])
+    return int(match[1] or match[2]), int(match[3]) if match[3] is not None else None
 
 
 def module_arguments(argument):
@@ -55,7 +56,7 @@ def module_arguments(argument):
 
 
 class AudioRoutes:
-    def __init__(self, pactl=pactl, device_resolver=device_card, registry=REGISTRY):
+    def __init__(self, pactl=pactl, device_resolver=device_endpoint, registry=REGISTRY):
         self.pactl = pactl
         self.device_resolver = device_resolver
         self.registry = Path(registry)
@@ -133,7 +134,7 @@ class AudioRoutes:
         return remaining
 
     def select_output(self, player, cards, sinks):
-        index = self.device_resolver(player["device"])
+        index, pcm = self.device_resolver(player["device"])
         matching_cards = [card for card in cards
                           if str(card.get("properties", {}).get("alsa.card", "")) == str(index)]
         if len(matching_cards) != 1:
@@ -149,8 +150,19 @@ class AudioRoutes:
         channels = tuple(player["channels"]) if "channels" in player else PAIRS[player.get("channel_pair", "front")]
         card_sinks = [sink for sink in sinks if self.matches_card(sink, card, index)
                       and sink.get("properties", {}).get("device.class") != "filter"]
+        if pcm is not None:
+            card_sinks = [sink for sink in card_sinks
+                          if str(sink.get("properties", {}).get("alsa.device", "")) == str(pcm)]
+            if not card_sinks:
+                raise RoutingError(player["name"] + ": selected playback PCM " + str(pcm)
+                                   + " has no active PulseAudio output. Enable its profile in Home Assistant's "
+                                   "Audio settings or choose a named Explicit output")
         masters = [sink for sink in card_sinks if set(channels).issubset(self.channels(sink))]
-        if len(masters) != 1:
+        if len(masters) > 1:
+            raise RoutingError(player["name"] + ": more than one active output has the requested channels: "
+                               + ", ".join(sink["name"] for sink in masters)
+                               + ". Select a playback device for the intended PCM or a named Explicit output")
+        if not masters:
             available = list(dict.fromkeys(channel for sink in card_sinks for channel in self.channels(sink)))
             raise RoutingError(player["name"] + ": requested " + ", ".join(channels)
                                + "; available channels: " + (", ".join(available) or "none")

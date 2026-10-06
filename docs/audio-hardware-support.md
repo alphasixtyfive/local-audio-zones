@@ -17,11 +17,16 @@ Changing a VM's USB topology can change the guest path; verify each room after
 a full reboot. Numeric control/playback nodes are supported but their card
 numbers can change.
 
-A playback node selects its containing card, not a particular PCM on that card.
-The device picker includes capture, sequencer and timer nodes, which are rejected.
-Soundcard selection requires one unambiguous active physical PulseAudio sink.
-Cards exposing several active PCM outputs need an explicitly named stereo sink
-through **Explicit output**, such as `pulse:my_stereo_sink`.
+A control node selects the card. A playback node such as `/dev/snd/pcmC4D3p`
+selects card 4, PCM 3, using PulseAudio's reported `alsa.card` and `alsa.device`
+properties. This distinguishes separate analogue, digital and HDMI endpoints
+without relying on model names. The selected PCM must already be active in the
+host audio profile; the app does not switch profiles or fall back to another PCM.
+Capture, sequencer and timer nodes are rejected.
+
+The requested channels must identify one physical sink. If several sinks match,
+the Log tab lists their names. Select the intended playback node or use a named
+stereo sink through **Explicit output**, such as `pulse:my_stereo_sink`.
 
 Choose Front left/right, Rear left/right, Side left/right or Centre/Subwoofer.
 For another layout, leave Output pair unset and enter two distinct **Custom
@@ -42,7 +47,7 @@ exists on every card. This keeps configuration in the native app settings.
 | 6/8-channel analog card | Independent pairs only when its active profile exposes those channels. |
 | 16-channel or other professional interface | Custom pairs can use reported `aux` channels; requires a unique active sink exposing them. |
 | Mono device | Device-based room mapping requires two distinct channels; mono mapping is outside this mode. |
-| Multiple PCMs or HDMI and analog outputs on one card | Do not guess which output to use; configure a named stereo sink explicitly. |
+| Multiple PCMs or HDMI and analog outputs on one card | Select the intended playback node and channels. If the host does not report a unique PCM endpoint, use a named stereo sink explicitly. |
 | Headphone socket | May duplicate another output rather than add independent channels. |
 | Centre/Subwoofer socket | Software remapping does not remove a hardware crossover or turn a filtered subwoofer output into full-range stereo. |
 
