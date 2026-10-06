@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+- Leave relay channels untouched until player status is known after a restart.
+- Attempt shutdown on every assigned channel even if one command fails.
+- Use named relay frame encoders and document adding another serial protocol.
+
 ## 0.1.2
 
 - Keep relay protocol definitions separate from amplifier control.

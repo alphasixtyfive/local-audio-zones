@@ -36,7 +36,7 @@ cat > "$WORK/options.json" <<'OPTIONS'
   ],
   "usb_relays": [
     {"name": "Amplifier", "device": "/dev/serial/by-id/usb-fixture-not-connected",
-     "protocol": "DSD TECH SH-UR01A", "zones": ["study", "bedroom"]}
+     "protocol": "DSD TECH SH-UR01A", "zones": ["study", "bedroom"], "off_delay": 0}
   ]
 }
 OPTIONS

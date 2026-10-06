@@ -95,6 +95,8 @@ the amplifier's wake-up time can clip the beginning of playback or announcements
 There is no automatic pre-roll or warm-up delay.
 
 A missing player status holds the current demand and cancels the idle timer.
+After startup or a service restart, a channel is left untouched until a room
+is receiving or every assigned room has been idle for the standby delay.
 A missing relay is retried every five seconds without stopping the audio
 players. Reconnection reapplies the current demand. An orderly app shutdown
 attempts to switch off configured channels. A server crash or unplugged relay
@@ -125,6 +127,20 @@ trigger connection, not switching the amplifier's mains power.
 Run `python3 scripts/usb_triggers_test.py` in the built image. Tests use fake
 serial transports, Unix status sockets and Linux pseudo-terminals; they do not
 require a physical relay or operate any connected hardware.
+
+To add a USB serial relay protocol:
+
+1. Add a named frame encoder and `Protocol` entry in `relay_protocols.py` using
+   the board's documented commands, channel count and baud rate. Include its
+   handshake and acknowledgement when needed.
+2. Add its name to the protocol selector in `config.yaml`. Adjust the channel
+   selector's upper bound if the protocol supports more channels.
+3. Add known on/off frames and a transport test to `usb_triggers_test.py`,
+   document the board here and verify it on hardware.
+
+Player status, standby logic and reconnection stay in `usb_triggers.py`.
+The current transport uses USB serial with 8N1 framing. HID and FTDI bitbang
+boards need a different transport, not another serial protocol entry.
 
 The LCUS wire format and shared-amplifier behaviour were checked against
 [Multi-Room Audio's .NET implementation](https://github.com/chrisuthe/Multi-SendSpin-Player-Container).
