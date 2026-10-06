@@ -79,12 +79,16 @@ FROM ghcr.io/home-assistant/aarch64-base-debian@sha256:acc61c0ab60cbca176ec0fe4d
 
 FROM base-${BUILD_ARCH}
 
-ARG APP_VERSION=0.1.3
+ARG BUILD_ARCH
+ARG BUILD_VERSION=0.1.4
 
 LABEL \
     org.opencontainers.image.source="https://github.com/alphasixtyfive/local-audio-zones" \
-    org.opencontainers.image.version="${APP_VERSION}" \
-    org.opencontainers.image.licenses="Apache-2.0"
+    org.opencontainers.image.version="${BUILD_VERSION}" \
+    org.opencontainers.image.licenses="Apache-2.0" \
+    io.hass.type="app" \
+    io.hass.version="${BUILD_VERSION}" \
+    io.hass.arch="${BUILD_ARCH}"
 
 # pactl resolves room routes and reports output state without Supervisor access.
 # ALSA plugins preserve the upstream default-output path on Home Assistant OS.

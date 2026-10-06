@@ -56,6 +56,21 @@ render() {
     bash -euo pipefail -c 'source "$1"; sendspin::render_player "$2"' bash "$LIBRARY" "$(jq -c '.[0]' "$WORK/players.json")" > "$WORK/player.conf"
 }
 printf 'Native configuration\n'
+python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$WORK/ready.sock"
+# shellcheck disable=SC2016
+bash -euo pipefail -c 'source "$1"; sendspin::wait_for_socket "$2"' bash "$COMMON" "$WORK/ready.sock"
+CHECKS=$((CHECKS + 1))
+printf '  ok   startup accepts a ready service socket\n'
+# Skip real waiting while checking the missing-socket failure path.
+# shellcheck disable=SC2016
+if bash -euo pipefail -c 'source "$1"; sleep() { :; }; sendspin::wait_for_socket "$2"' \
+    bash "$COMMON" "$WORK/missing.sock" 2> "$WORK/stderr"; then
+    printf '  FAIL startup accepted a missing service socket\n' >&2
+    exit 1
+fi
+grep -F 'Timed out waiting for service socket' "$WORK/stderr" > /dev/null
+CHECKS=$((CHECKS + 1))
+printf '  ok   startup rejects a missing service socket with a diagnostic\n'
 prepare '{"zones":[]}'
 check 'empty zones creates no implicit player' 'length == 0'
 prepare '{}'

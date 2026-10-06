@@ -19,7 +19,7 @@ at `ghcr.io/alphasixtyfive/local-audio-zones:<version>`. Check that the package
 is public and can be pulled anonymously before referencing it in the app's
 `image` setting. Test installation from the repository URL.
 
-Version 0.1.0 is experimental. Keep hardware and recovery limits in the
+The app is experimental. Keep hardware and recovery limits in the
 [hardware guide](audio-hardware-support.md).
 
 Retain upstream history, licenses and [NOTICE](../local_audio_zones/NOTICE).

@@ -24,8 +24,10 @@ fi
 
 decision=$(sendspin::daemon_decision)
 if [ "${decision}" = yes ]; then
-    if [ "$(s6-svstat -o up /run/service/avahi)" != true ]; then
-        sendspin::log "The bundled Avahi service is not running."
-        exit 1
-    fi
+    for service in dbus avahi; do
+        if [ "$(s6-svstat -o up "/run/service/${service}")" != true ]; then
+            sendspin::log "The bundled ${service} service is not running."
+            exit 1
+        fi
+    done
 fi
