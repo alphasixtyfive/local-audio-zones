@@ -121,6 +121,20 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(self.pulse.calls, [])
         self.assertFalse(self.registry.exists())
 
+    def test_native_channel_lists_are_supported(self):
+        self.pulse.sinks[0]["channel_map"] = ["front-left", "front-right"]
+        self.assertEqual(self.routes.resolve([room()])[0]["output"], "pulse:local_audio_zones_study")
+
+    def test_invalid_channel_maps_fail_before_creating_routes(self):
+        for channel_map in (None, {}, [], "", "front-left,front-left",
+                            ["front-left", 1], ["front-left", ""]):
+            with self.subTest(channel_map=channel_map):
+                self.pulse.sinks[0]["channel_map"] = channel_map
+                with self.assertRaisesRegex(audio_routes.RoutingError, "channel names"):
+                    self.routes.resolve([room()])
+                self.assertEqual(self.pulse.mutations(), [])
+        self.assertFalse(self.registry.exists())
+
     def test_short_module_list_preserves_empty_arguments_and_quoted_properties(self):
         argument = 'sink_name=existing_front master=usb_card_a sink_properties=\'device.description="Front café"\''
         self.pulse.module_text = "0\tmodule-device-restore\t\t\n50\tmodule-remap-sink\t" + argument + "\t"

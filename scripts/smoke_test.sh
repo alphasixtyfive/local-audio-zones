@@ -73,6 +73,15 @@ stop_cleanly() {
 config_line() { docker exec "$PLAYER" cat /run/sendspin-cli/zones/study/config | grep -Fx -- "$1" > /dev/null || fail "missing setting: $1"; }
 
 printf 'Native app startup\n'
+labels=$(docker image inspect --format '{{json .Config.Labels}}' "$IMAGE")
+version=$(sed -nE 's/^version: "([^"]+)"/\1/p' "$SCRIPT_DIR/../local_audio_zones/config.yaml")
+arch=$(docker image inspect --format '{{.Architecture}}' "$IMAGE")
+if [ "$arch" = arm64 ]; then arch=aarch64; fi
+jq -e --arg version "$version" --arg arch "$arch" '
+    .["io.hass.type"] == "app" and .["io.hass.version"] == $version
+    and .["io.hass.arch"] == $arch and .["org.opencontainers.image.version"] == $version
+' <<< "$labels" > /dev/null || fail 'Home Assistant image labels do not match the manifest'
+pass 'Home Assistant image labels match the version and architecture'
 start '{"zones":[]}'
 wait_healthy
 docker exec "$PLAYER" jq -e 'length == 0' /run/sendspin-cli/players.json > /dev/null
@@ -90,11 +99,20 @@ config_line 'log-level = debug'
 config_line 'buffer-ms = 100'
 docker exec "$PLAYER" /usr/bin/container-healthcheck
 pass 'native options render player identity and per-room overrides'
-# The watchdog also owns bundled daemon health.
-docker exec "$PLAYER" s6-svc -d /run/service/avahi
-sleep 0.5
-if docker exec "$PLAYER" /usr/bin/container-healthcheck > /dev/null 2>&1; then fail 'health ignored stopped Avahi'; fi
-docker exec "$PLAYER" s6-svc -u /run/service/avahi
+# Discovery requires both D-Bus and Avahi, even while players are idle.
+for service in avahi dbus; do
+    docker exec "$PLAYER" s6-svc -d "/run/service/$service"
+    sleep 0.5
+    if docker exec "$PLAYER" /usr/bin/container-healthcheck > "$WORK/health.log" 2>&1; then
+        fail "health ignored stopped $service"
+    fi
+    grep -F "The bundled $service service is not running." "$WORK/health.log" > /dev/null
+    docker exec "$PLAYER" s6-svc -u "/run/service/$service"
+done
+for service in dbus avahi; do
+    docker exec "$PLAYER" timeout 10 s6-svwait -u "/run/service/$service"
+done
+docker exec "$PLAYER" /usr/bin/container-healthcheck
 wait_log 'mdns: advertising _sendspin._tcp'
 stop_cleanly
 pass 'daemon failure affects health and shutdown remains bounded'

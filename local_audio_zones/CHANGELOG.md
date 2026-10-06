@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.4
+
+- Add Home Assistant image labels and use its standard build version argument.
+- Put setup instructions in the Documentation tab and shorten the app intro.
+- Separate soundcard selection from route creation and reject invalid channel maps.
+- Report missing discovery sockets and include D-Bus in health checks.
+
 ## 0.1.3
 
 - Leave relay channels untouched until player status is known after a restart.

@@ -132,6 +132,31 @@ class AudioRoutes:
                     remaining.append(module)
         return remaining
 
+    def select_output(self, player, cards, sinks):
+        index = self.device_resolver(player["device"])
+        matching_cards = [card for card in cards
+                          if str(card.get("properties", {}).get("alsa.card", "")) == str(index)]
+        if len(matching_cards) != 1:
+            raise RoutingError(player["name"] + ": selected soundcard has no unique PulseAudio card")
+        card = matching_cards[0]
+        serial = card.get("properties", {}).get("device.serial")
+        if player["device"].startswith("/dev/snd/by-id/") and serial and any(
+            other["index"] != card["index"]
+            and other.get("properties", {}).get("device.serial") == serial for other in cards
+        ):
+            raise RoutingError(player["name"] + ": multiple soundcards share this by-id identity; "
+                               "select a by-path port or control/playback device and verify the physical mapping")
+        channels = tuple(player["channels"]) if "channels" in player else PAIRS[player.get("channel_pair", "front")]
+        card_sinks = [sink for sink in sinks if self.matches_card(sink, card, index)
+                      and sink.get("properties", {}).get("device.class") != "filter"]
+        masters = [sink for sink in card_sinks if set(channels).issubset(self.channels(sink))]
+        if len(masters) != 1:
+            available = list(dict.fromkeys(channel for sink in card_sinks for channel in self.channels(sink)))
+            raise RoutingError(player["name"] + ": requested " + ", ".join(channels)
+                               + "; available channels: " + (", ".join(available) or "none")
+                               + ". Choose two channels on one output or a suitable profile in Home Assistant's Audio settings")
+        return masters[0], channels
+
     def resolve(self, players):
         if not any("device" in player for player in players):
             return players
@@ -153,30 +178,9 @@ class AudioRoutes:
             if "device" not in player:
                 routes.append((player, None, None))
                 continue
-            index = self.device_resolver(player["device"])
-            matching_cards = [card for card in cards
-                              if str(card.get("properties", {}).get("alsa.card", "")) == str(index)]
-            if len(matching_cards) != 1:
-                raise RoutingError(player["name"] + ": selected soundcard has no unique PulseAudio card")
-            card = matching_cards[0]
-            serial = card.get("properties", {}).get("device.serial")
-            if player["device"].startswith("/dev/snd/by-id/") and serial and any(
-                other["index"] != card["index"]
-                and other.get("properties", {}).get("device.serial") == serial for other in cards
-            ):
-                raise RoutingError(player["name"] + ": multiple soundcards share this by-id identity; "
-                                   "select a by-path port or control/playback device and verify the physical mapping")
-            channels = tuple(player["channels"]) if "channels" in player else PAIRS[player.get("channel_pair", "front")]
-            card_sinks = [sink for sink in sinks if self.matches_card(sink, card, index)
-                          and sink.get("properties", {}).get("device.class") != "filter"]
-            masters = [sink for sink in card_sinks if set(channels).issubset(self.channels(sink))]
-            if len(masters) != 1:
-                available = list(dict.fromkeys(channel for sink in card_sinks for channel in self.channels(sink)))
-                raise RoutingError(player["name"] + ": requested " + ", ".join(channels)
-                                   + "; available channels: " + (", ".join(available) or "none")
-                                   + ". Choose two channels on one output or a suitable profile in Home Assistant's Audio settings")
-            reserve_channels(masters[0]["name"], channels, player["name"])
-            routes.append((player, masters[0], channels))
+            master, channels = self.select_output(player, cards, sinks)
+            reserve_channels(master["name"], channels, player["name"])
+            routes.append((player, master, channels))
 
         module_by_index = {module["index"]: module for module in modules}
         sink_by_name = {sink["name"]: sink for sink in sinks}
@@ -265,7 +269,13 @@ class AudioRoutes:
     @staticmethod
     def channels(sink):
         channel_map = sink.get("channel_map", "")
-        return channel_map.split(",") if isinstance(channel_map, str) else channel_map
+        channels = channel_map.split(",") if isinstance(channel_map, str) else channel_map
+        if not isinstance(channels, list) or not channels or any(
+            not isinstance(channel, str) or not re.fullmatch(r"[a-z][a-z0-9-]*", channel)
+            for channel in channels
+        ) or len(set(channels)) != len(channels):
+            raise RoutingError("Could not read channel names for " + sink.get("name", "audio output"))
+        return channels
 
     @staticmethod
     def existing_remap(master, channels, sinks, modules):

@@ -113,12 +113,13 @@ sendspin::wait_for_socket() {
 
     for ((i = 0; i < 100; i++)); do
         if [ -S "$1" ]; then
-            break
+            return 0
         fi
         sleep 0.1
     done
 
-    return 0
+    sendspin::log "Timed out waiting for service socket $1."
+    return 1
 }
 
 sendspin::option() {

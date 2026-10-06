@@ -16,7 +16,7 @@ Assistant handles playback, volume and groups.
 3. Add your rooms in **Configuration**, save, then restart the app.
 
 Music Assistant and the app need working mDNS on the same local network.
-Version 0.1.3 is experimental.
+Version 0.1.4 is experimental.
 
 ## Configuration
 
@@ -31,7 +31,7 @@ relay device and model, then assign the rooms that use that amplifier. See the
 The app checks channel availability and conflicts before starting. It leaves
 hardware profiles, sample rates and output levels alone.
 
-See the [app guide](local_audio_zones/README.md),
+See the [app guide](local_audio_zones/DOCS.md),
 [hardware requirements](docs/audio-hardware-support.md) and
 [routing guide](docs/pulseaudio-zones.md) for details and current limits.
 
@@ -51,8 +51,7 @@ For local testing on Home Assistant OS, copy `local_audio_zones/` to
 Based on [Music Assistant Local Audio](https://github.com/music-assistant/local-audio-addon)
 and its [native-player update](https://github.com/music-assistant/local-audio-addon/pull/34).
 Playback uses [Sendspin](https://github.com/Sendspin/sendspin-cpp-cli), with a
-[small routing patch](local_audio_zones/patches/README.md). The icon adapts
-[HASSConnect](https://github.com/alphasixtyfive/HASSConnect)'s house artwork.
+[small routing patch](local_audio_zones/patches/README.md).
 
 This is an independent community app. Upstream licenses and notices are
 retained in [LICENSE](LICENSE) and [NOTICE](local_audio_zones/NOTICE).

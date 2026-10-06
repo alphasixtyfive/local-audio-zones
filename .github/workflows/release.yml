@@ -94,11 +94,11 @@ jobs:
       - name: Build and push this architecture by digest
         id: push
         env:
-          APP_VERSION: ${{ needs.preflight.outputs.version }}
+          BUILD_VERSION: ${{ needs.preflight.outputs.version }}
         run: |
           docker buildx build \
             --build-arg "BUILD_ARCH=${{ matrix.arch }}" \
-            --build-arg "APP_VERSION=$APP_VERSION" \
+            --build-arg "BUILD_VERSION=$BUILD_VERSION" \
             --provenance=false \
             --sbom=false \
             --metadata-file metadata.json \
