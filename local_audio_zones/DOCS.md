@@ -95,7 +95,9 @@ If music is distorted, first check the soundcard's host driver and active audio
 profile. This app preserves host rates, profiles and levels; an audio buffer
 setting does not repair incorrect USB driver settings. See the
 [hardware guide](https://github.com/alphasixtyfive/local-audio-zones/blob/main/docs/audio-hardware-support.md)
-for supported layouts and the confirmed Proxmox setup.
+for supported layouts and the
+[routing guide](https://github.com/alphasixtyfive/local-audio-zones/blob/main/docs/pulseaudio-zones.md)
+for host setup.
 
 ## License
 
