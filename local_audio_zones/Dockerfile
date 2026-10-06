@@ -72,15 +72,14 @@ RUN core_tag="$(sed -n 's/^set(SENDSPIN_GIT_TAG "\([^"]*\)".*/\1/p' CMakeLists.t
     && sha256sum /tmp/pulse-pin-named-output.patch >> /build-info.txt
 
 
-# Debian trixie bases with s6-overlay v3. Keep both digests aligned
-# with the CI workflows and the Debian release used by the build stage above.
+# Debian trixie with s6-overlay v3, matching the build stage.
 FROM ghcr.io/home-assistant/amd64-base-debian@sha256:9281ee991c28532ddae10114ac84750f4aca287a496f6e19583f3a750ad5e786 AS base-amd64
 FROM ghcr.io/home-assistant/aarch64-base-debian@sha256:acc61c0ab60cbca176ec0fe4d37278be514a4a6babfc1becde951c99d17e92f0 AS base-aarch64
 
 FROM base-${BUILD_ARCH}
 
 ARG BUILD_ARCH
-ARG BUILD_VERSION=0.1.4
+ARG BUILD_VERSION=0.1.0
 
 LABEL \
     org.opencontainers.image.source="https://github.com/alphasixtyfive/local-audio-zones" \

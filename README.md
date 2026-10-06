@@ -16,13 +16,14 @@ Assistant handles playback, volume and groups.
 3. Add your rooms in **Configuration**, save, then restart the app.
 
 Music Assistant and the app need working mDNS on the same local network.
-Version 0.1.4 is experimental.
+This first release is experimental while testing across more hardware continues.
 
 ## Configuration
 
 Select a detected soundcard and an output pair for each room. Custom channel
 pairs and existing stereo outputs are also supported. Keep each room's player
-ID when renaming it.
+ID when renaming it. For identical cards without unique serial numbers, use
+their separate `/dev/snd/by-path/` links in the YAML editor and keep USB ports fixed.
 
 Optional USB serial relays can switch an amplifier's 12 V trigger. Select the
 relay device and model, then assign the rooms that use that amplifier. See the
@@ -44,7 +45,9 @@ scripts/smoke_test.sh local-audio-zones
 
 CI checks configuration, supervision, routing and AppArmor on amd64 and aarch64.
 For local testing on Home Assistant OS, copy `local_audio_zones/` to
-`/addons/local_audio_zones/` and reload the app store.
+`/addons/local_audio_zones/`, remove `image` from the copy's `config.yaml`,
+then reload the app store. This builds your local source instead of pulling
+the published image.
 
 ## Credits
 

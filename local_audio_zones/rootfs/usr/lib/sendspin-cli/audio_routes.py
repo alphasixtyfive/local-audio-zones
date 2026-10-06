@@ -195,12 +195,22 @@ class AudioRoutes:
             module = module_by_index.get(sink.get("owner_module"), {})
             if module.get("name") == "module-remap-sink":
                 arguments = module_arguments(module["argument"])
-                if arguments.get("master") in device_masters and arguments.get("remix") != "no":
+                master_name = arguments.get("master")
+                if master_name not in sink_by_name:
+                    master_name = sink.get("properties", {}).get("device.master_device")
+                if not isinstance(master_name, str) or master_name not in sink_by_name:
+                    raise RoutingError(player["name"] + ": cannot identify this explicit remap's master; "
+                                       "select its soundcard and channels")
+                if sink_by_name[master_name].get("properties", {}).get("device.class") == "filter":
+                    raise RoutingError(player["name"] + ": nested remaps cannot verify room isolation; "
+                                       "select its soundcard and channels")
+                if master_name in device_masters and arguments.get("remix") != "no":
                     raise RoutingError(player["name"] + ": this explicit remap can mix into other rooms; "
                                        "use a remap with remix=no or select its soundcard and channels")
-                source_channels = arguments.get("master_channel_map", "").split(",")
-                if arguments.get("master") and all(source_channels):
-                    reserve_channels(arguments["master"], source_channels, player["name"])
+                source_channels = (arguments["master_channel_map"].split(",")
+                                   if "master_channel_map" in arguments else self.channels(sink))
+                if all(source_channels):
+                    reserve_channels(master_name, source_channels, player["name"])
             elif any(key[0] == sink["name"] for key in selected_channels):
                 reserve_channels(sink["name"], self.channels(sink), player["name"])
 

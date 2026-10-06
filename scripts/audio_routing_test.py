@@ -81,7 +81,7 @@ class PulseFixture:
                     f"channel_map=front-left,front-right master_channel_map={channels} remix={remix}")
         self.modules.append({"index": index, "name": "module-remap-sink", "argument": argument})
         self.sinks.append({"name": name, "owner_module": index, "card": 9,
-                           "properties": {"device.class": "filter"},
+                           "properties": {"device.class": "filter", "device.master_device": "usb_card_a"},
                            "channel_map": "front-left,front-right", "volume": {"fixture": "80%"}})
 
     def mutations(self):
@@ -273,6 +273,66 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(result[1], explicit)
         self.routes.cleanup()
         self.assertEqual([module["index"] for module in self.pulse.modules], [50])
+
+    def test_explicit_implicit_channel_map_cannot_overlap_a_device_room(self):
+        self.pulse.remap("implicit_front")
+        self.pulse.modules[0]["argument"] = self.pulse.modules[0]["argument"].replace(
+            " master_channel_map=front-left,front-right", "")
+        explicit = {"id": "expert", "name": "Expert", "output": "pulse:implicit_front"}
+        for players in ([room(), explicit], [explicit, room()]):
+            with self.subTest(order=[player["id"] for player in players]):
+                with self.assertRaisesRegex(audio_routes.RoutingError, "front-left"):
+                    self.routes.resolve(players)
+                self.assertEqual(self.pulse.mutations(), [])
+
+    def test_explicit_implicit_channel_map_allows_a_nonoverlapping_device_room(self):
+        self.pulse.remap("implicit_front")
+        self.pulse.modules[0]["argument"] = self.pulse.modules[0]["argument"].replace(
+            " master_channel_map=front-left,front-right", "")
+        explicit = {"id": "expert", "name": "Expert", "output": "pulse:implicit_front"}
+        result = self.routes.resolve([room(pair="rear"), explicit])
+        self.assertEqual(result[1], explicit)
+        self.routes.cleanup()
+        self.assertEqual([module["index"] for module in self.pulse.modules], [50])
+
+    def test_explicit_default_master_cannot_overlap_a_device_room(self):
+        self.pulse.remap("default_front")
+        self.pulse.modules[0]["argument"] = self.pulse.modules[0]["argument"].replace(" master=usb_card_a", "")
+        explicit = {"id": "expert", "name": "Expert", "output": "pulse:default_front"}
+        for players in ([room(), explicit], [explicit, room()]):
+            with self.subTest(order=[player["id"] for player in players]):
+                with self.assertRaisesRegex(audio_routes.RoutingError, "front-left"):
+                    self.routes.resolve(players)
+                self.assertEqual(self.pulse.mutations(), [])
+
+    def test_explicit_default_master_allows_a_nonoverlapping_device_room(self):
+        self.pulse.remap("default_front")
+        self.pulse.modules[0]["argument"] = self.pulse.modules[0]["argument"].replace(" master=usb_card_a", "")
+        explicit = {"id": "expert", "name": "Expert", "output": "pulse:default_front"}
+        result = self.routes.resolve([room(pair="rear"), explicit])
+        self.assertEqual(result[1], explicit)
+        self.routes.cleanup()
+        self.assertEqual([module["index"] for module in self.pulse.modules], [50])
+
+    def test_explicit_unknown_master_is_rejected_before_route_creation(self):
+        self.pulse.remap("unknown_front")
+        self.pulse.modules[0]["argument"] = self.pulse.modules[0]["argument"].replace(" master=usb_card_a", "")
+        self.pulse.sinks[-1]["properties"].pop("device.master_device")
+        explicit = {"id": "expert", "name": "Expert", "output": "pulse:unknown_front"}
+        with self.assertRaisesRegex(audio_routes.RoutingError, "cannot identify"):
+            self.routes.resolve([room(pair="rear"), explicit])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_explicit_nested_remap_is_rejected_without_traversing_filters(self):
+        self.pulse.remap("inner_front")
+        self.pulse.remap("outer_front", index=51)
+        self.pulse.modules[-1]["argument"] = self.pulse.modules[-1]["argument"].replace(
+            "master=usb_card_a", "master=inner_front")
+        self.pulse.sinks[-1]["properties"]["device.master_device"] = "inner_front"
+        explicit = {"id": "expert", "name": "Expert", "output": "pulse:outer_front"}
+        with self.assertRaisesRegex(audio_routes.RoutingError, "nested remaps"):
+            self.routes.resolve([room(pair="rear"), explicit])
+        self.assertEqual(self.pulse.mutations(), [])
 
     def test_explicit_remixing_routes_cannot_share_a_device_selected_master(self):
         explicit = {"id": "expert", "name": "Expert", "output": "pulse:expert_route"}

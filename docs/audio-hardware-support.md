@@ -82,20 +82,10 @@ The latter concerns a multichannel player stream; this app instead gives each
 stereo room its own player. Keep these different requirements separate when
 reporting hardware results upstream.
 
-## Further improvements
+## Device identity
 
 Keep device identity, playback endpoint and channel selection separate. ALSA
 `hw:CARD=...,DEV=...` selects a PCM endpoint; it does not select its left/right
 channels. PulseAudio's named positions describe channels on that endpoint,
 including `aux` positions for layouts without surround labels. Replacing these
 names with fixed socket numbers would assume an ordering the app cannot know.
-
-The next routing improvement is to honor the PCM device number when a playback
-node is selected, using the sink's reported `alsa.device` property. Until then,
-use an explicitly named stereo output for a card with multiple active PCMs.
-Improve ambiguous-output errors by listing candidates rather than guessing.
-
-Recovery should restore only affected room routes when hardware returns. Keep
-that separate from process supervision and preserve rooms on connected cards.
-Verify two identical cards, multiple PCM endpoints and unplug/replug behavior
-before advertising automatic recovery or broader hardware support.

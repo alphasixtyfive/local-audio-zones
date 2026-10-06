@@ -1,17 +1,5 @@
 #!/usr/bin/env bash
-#
-# Unit checks for scripts/release_notes.sh.
-#
-# The release body is assembled once per release and read by everyone the release reaches, and
-# nothing downstream of it would notice it being wrong: a body that quoted the wrong sections,
-# or none, publishes exactly as happily as a correct one. So the range it selects is asserted
-# here against the shipped changelog -- where the first release has one expected
-# section -- and its edges against scratch changelogs that carry the cases the real file does not
-# yet have.
-#
-# Needs: bash, sed, grep and mktemp.
-#
-# Usage: scripts/release_notes_test.sh
+# Check release ranges, Markdown rendering and invalid input.
 
 set -euo pipefail
 
@@ -47,8 +35,6 @@ assert_equal() {
     fi
 }
 
-# The body, or `error` when the script refused to produce one -- a distinct outcome from a body,
-# so a refusal is never mistaken for an empty release.
 body_of() {
     local out=''
     if ! out="$("$NOTES" --image "$IMAGE" "$@" 2>/dev/null)"; then
@@ -64,7 +50,6 @@ status_of() {
     printf '%s' "$status"
 }
 
-# The `## X.Y.Z` headings the body carries, in the order it carries them.
 assert_delivers() {
     local want=$1 what=$2
     shift 2
@@ -79,9 +64,6 @@ assert_delivers() {
     assert_equal "$want" "${got% }" "$what"
 }
 
-# The exit status is what CI rides on, so a refusal is asserted as a status rather than as an
-# absent body: a script that printed an error and exited 0 would publish the empty release it
-# was complaining about.
 assert_refuses() {
     local want=$1 what=$2
     shift 2
@@ -103,11 +85,6 @@ check_the_lead_line() {
     assert_equal "Published as \`$IMAGE:0.1.0\` and \`$IMAGE:latest\`." \
         "$(printf '%s\n' "$body" | head -1)" \
         'the introduction names the image and both published tags'
-    if printf '%s\n' "$body" | grep -q '^Also carries'; then
-        fail 'the first app release claims to carry an older release'
-    else
-        pass 'the first app release carries only its own section'
-    fi
 
     cat >"$changelog" <<'CHANGELOG'
 # Changelog
@@ -131,28 +108,23 @@ CHANGELOG
     assert_delivers '1.4.0 1.3.0 1.2.0 1.1.0' 'an empty previous opens the whole range' \
         --version 1.4.0 --previous '' --changelog "$changelog"
     body="$(body_of --version 1.4.0 --previous 1.1.0 --changelog "$changelog")"
-    assert_equal 'Also carries 1.3.0 and 1.2.0, which were bumped without a release of their own and are first published here.' \
-        "$(printf '%s\n' "$body" | sed -n '/^Also carries/p')" \
-        'a range names the additional versions in the plural'
+    assert_delivers '1.4.0 1.3.0 1.2.0' 'all sections since the previous release are included' \
+        --version 1.4.0 --previous 1.1.0 --changelog "$changelog"
     assert_equal "Published as \`$IMAGE:1.4.0\` and \`$IMAGE:latest\`.
 
-Also carries 1.3.0 and 1.2.0, which were bumped without a release of their own and are first published here.
-
 ## 1.4.0" \
-        "$(printf '%s\n' "$body" | head -5)" \
-        'the introduction and first section are separated by blank lines'
-    body="$(body_of --version 1.3.0 --previous 1.1.0 --changelog "$changelog")"
-    assert_equal 'Also carries 1.2.0, which was bumped without a release of its own and is first published here.' \
-        "$(printf '%s\n' "$body" | sed -n '/^Also carries/p')" \
-        'one additional version is described in the singular'
+        "$(printf '%s\n' "$body" | head -3)" \
+        'the introduction leads directly into the changelog'
+    if printf '%s\n' "$body" | grep -q '^Also carries'; then
+        fail 'the body contains development-history prose'
+    else
+        pass 'the body contains only the image introduction and changelog'
+    fi
 }
 
 check_the_sections_are_verbatim() {
     step 'the sections are quoted rather than rewritten'
 
-    # A scratch file rather than the shipped one, so the expected body can be written out in
-    # full: the point here is that every character between the headings survives, which an
-    # assertion on the headings alone cannot say.
     local changelog="$SCRATCH_ROOT/verbatim.md"
     cat >"$changelog" <<'CHANGELOG'
 # Changelog
@@ -164,7 +136,6 @@ Built on something, and through it something else.
 - A bullet with `code`, **bold** and an em dash — in it.
   Wrapped onto a second line.
 
-
 ## 1.1.0
 
 - The section above trails two blank lines; this one must still be one away.
@@ -175,7 +146,7 @@ Initial release.
 CHANGELOG
 
     local want got
-    # shellcheck disable=SC2016  # the backticks are Markdown code spans in the expected body.
+    # shellcheck disable=SC2016  # Markdown code spans.
     want='## 1.2.0
 
 Built on something, and through it something else.
@@ -187,7 +158,6 @@ Built on something, and through it something else.
 
 - The section above trails two blank lines; this one must still be one away.'
 
-    # Everything below the lead line, which is the part that came out of the changelog.
     got="$(body_of --version 1.2.0 --previous 1.0.0 --changelog "$changelog" |
         sed -n '/^## /,$p')"
     assert_equal "$want" "$got" 'the sections come through verbatim, one blank line apart'
@@ -196,8 +166,6 @@ Built on something, and through it something else.
 check_versions_are_compared_as_numbers() {
     step 'versions are numbers, not strings'
 
-    # The whole reason the comparison is field-by-field. Sorted as text, 1.1.10 is below 1.1.9,
-    # so a release of 1.1.10 would drop its own section and quote its predecessor instead.
     local changelog="$SCRATCH_ROOT/numeric.md"
     cat >"$changelog" <<'CHANGELOG'
 # Changelog
@@ -263,10 +231,6 @@ CHANGELOG
 check_fenced_blocks_are_content() {
     step 'fenced blocks are content, not structure'
 
-    # A changelog entry showing a command is ordinary, and a shell comment inside one starts
-    # with the same character a heading does. Read as a heading it would end the section there
-    # and drop the rest of the entry out of the release -- a body that looks written rather
-    # than truncated.
     local changelog="$SCRATCH_ROOT/fenced.md"
     cat >"$changelog" <<'CHANGELOG'
 # Changelog
@@ -290,8 +254,6 @@ CHANGELOG
     assert_delivers '2.0.0' 'a fenced block does not close the section around it' \
         --version 2.0.0 --previous 1.0.0 --changelog "$changelog"
 
-    # A fence nobody closed leaves every later heading unread, so the body would run to the end
-    # of the file and announce versions that shipped months ago as newly published.
     local unclosed="$SCRATCH_ROOT/unclosed-fence.md"
     sed '/^```$/d' "$changelog" >"$unclosed"
     assert_refuses 1 'a code fence nobody closed is refused rather than run past' \
@@ -312,10 +274,6 @@ CHANGELOG
 check_the_released_section_leads() {
     step 'the released version has to be the topmost section in range'
 
-    # What everything downstream rests on: the first heading is the version being released and
-    # the rest are what it folded in. A section written to the bottom of the file instead of the
-    # top -- an ordinary enough mistake -- would have the release announce itself as something it
-    # also carries, in a body that reads as though it were meant.
     local changelog="$SCRATCH_ROOT/misordered.md"
     cat >"$changelog" <<'CHANGELOG'
 # Changelog
@@ -336,8 +294,6 @@ CHANGELOG
 check_it_refuses_rather_than_publishing_nothing() {
     step 'what it refuses to build a body out of'
 
-    # The case this whole script exists to make loud. A tag whose version nobody wrote up would
-    # otherwise publish an empty release body and look deliberate.
     assert_refuses 1 'a version with no section is an error, not an empty body' \
         --version 9.9.9 --previous 0.1.0 --changelog "$REAL_CHANGELOG"
 
@@ -354,15 +310,11 @@ check_it_refuses_rather_than_publishing_nothing() {
     assert_refuses 1 'a changelog that does not exist is refused' \
         --version 0.1.0 --previous 0.0.0 --changelog "$SCRATCH_ROOT/nowhere.md"
 
-    # The lead line appends `:$VERSION` and `:latest`, so a ref that arrived already tagged
-    # would announce `repo:tag:version` -- an image nobody published.
     local status=0
     "$NOTES" --image "$IMAGE:0.1.0" --version 0.1.0 --previous 0.0.0 \
         --changelog "$REAL_CHANGELOG" >/dev/null 2>&1 || status=$?
     assert_equal 1 "$status" 'an --image that already carries a tag is refused'
 
-    # Usage rather than an error: `--previous` left off entirely is a caller that never looked
-    # the previous tag up, and quoting the whole changelog at it would hide that.
     assert_refuses 2 'a missing --previous is a usage error, not an open range' \
         --version 0.1.0 --changelog "$REAL_CHANGELOG"
     assert_refuses 2 'a missing --version is a usage error' \
@@ -382,7 +334,7 @@ main() {
     }
 
     SCRATCH_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/release-notes-test.XXXXXX")"
-    # shellcheck disable=SC2064  # the path is wanted as it is now, not at trap time.
+    # shellcheck disable=SC2064  # Capture the scratch path now.
     trap "rm -rf -- '$SCRATCH_ROOT'" EXIT
 
     check_the_shipped_changelog

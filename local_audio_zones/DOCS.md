@@ -46,6 +46,9 @@ Keep IDs when renaming rooms. Optional port, log level, server discovery, buffer
 and start/stop commands can be set per room. Logging, server, buffer and commands
 inherit the app settings when omitted. **Explicit output** accepts an existing
 native player output instead of selecting a sound device.
+Explicit outputs are intended for advanced setups. The app can check ordinary
+PulseAudio remaps against device-selected rooms, but cannot verify physical
+channel isolation for arbitrary backends or nested filters.
 
 Music Assistant creates standard parent players for the room outputs and
 controls playback, volume, mute and grouping. Keep its minimum
