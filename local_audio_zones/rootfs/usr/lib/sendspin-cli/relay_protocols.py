@@ -14,6 +14,14 @@ class Protocol:
     error: bytes = b""
 
 
+def dsd(channel, enabled):
+    return f"AT+CH{channel}={int(enabled)}\r\n".encode("ascii")
+
+
+def kmtronic(channel, enabled):
+    return bytes((0xFF, channel, int(enabled)))
+
+
 def lcus(channel, enabled):
     frame = (0xA0, channel, int(enabled))
     return bytes((*frame, sum(frame) & 0xFF))
@@ -22,11 +30,11 @@ def lcus(channel, enabled):
 PROTOCOLS = {
     "DSD TECH SH-UR01A": Protocol(
         channels=1,
-        encode=lambda channel, enabled: f"AT+CH{channel}={int(enabled)}\r\n".encode("ascii"),
+        encode=dsd,
         handshake=b"AT\r\n", acknowledgement=b"OK", error=b"ERROR",
     ),
     "KMtronic": Protocol(
-        channels=1, encode=lambda channel, enabled: bytes((0xFF, channel, int(enabled))),
+        channels=1, encode=kmtronic,
     ),
     "LCUS": Protocol(channels=8, encode=lcus),
 }

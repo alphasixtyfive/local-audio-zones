@@ -79,7 +79,7 @@ FROM ghcr.io/home-assistant/aarch64-base-debian@sha256:acc61c0ab60cbca176ec0fe4d
 
 FROM base-${BUILD_ARCH}
 
-ARG APP_VERSION=0.1.2
+ARG APP_VERSION=0.1.3
 
 LABEL \
     org.opencontainers.image.source="https://github.com/alphasixtyfive/local-audio-zones" \

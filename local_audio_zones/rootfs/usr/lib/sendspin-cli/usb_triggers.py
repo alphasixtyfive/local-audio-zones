@@ -119,7 +119,7 @@ def stream_status(zone, run_dir=RUN):
 
 @dataclass
 class Demand:
-    enabled: bool = False
+    enabled: bool | None = None
     idle_since: float | None = None
 
     def update(self, states, now, delay):
@@ -189,7 +189,8 @@ class Board:
         LOG.info("Connected %s relay at %s", self.protocol, self.device)
 
     def apply(self, desired, now):
-        if now < self.retry_at:
+        desired = {channel: enabled for channel, enabled in desired.items() if enabled is not None}
+        if not desired or now < self.retry_at:
             return
         try:
             info = os.stat(self.device)
@@ -222,9 +223,11 @@ class Board:
         try:
             if self.port is not None:
                 for channel in channels:
-                    self.write(command(self.protocol, channel, False))
-        except (OSError, ValueError) as error:
-            LOG.warning("Could not switch off USB relay %s: %s", self.device, error)
+                    try:
+                        self.write(command(self.protocol, channel, False))
+                    except (OSError, ValueError) as error:
+                        LOG.warning("Could not switch off USB relay %s channel %s: %s",
+                                    self.device, channel, error)
         finally:
             self.close()
 

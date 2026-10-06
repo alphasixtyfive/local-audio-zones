@@ -130,10 +130,16 @@ class ProtocolTests(unittest.TestCase):
 
 
 class DemandTests(unittest.TestCase):
-    def test_startup_unknown_does_not_energize_amplifier(self):
+    def test_startup_unknown_does_not_decide_amplifier_state(self):
         demand = relay.Demand()
-        self.assertFalse(demand.update([None, False], 0, 60))
+        self.assertIsNone(demand.update([None, False], 0, 60))
         self.assertIsNone(demand.idle_since)
+
+    def test_startup_idle_waits_for_the_full_standby_delay(self):
+        demand = relay.Demand()
+        self.assertIsNone(demand.update([False, False], 0, 60))
+        self.assertIsNone(demand.update([False, False], 59.99, 60))
+        self.assertFalse(demand.update([False, False], 60, 60))
 
     def test_shared_amplifier_stays_on_until_last_room_stops(self):
         demand = relay.Demand()
@@ -241,6 +247,17 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(board.applied, {1: True})
         self.assertEqual(port.reset_count, 1)
 
+    def test_unknown_channels_are_untouched_until_status_is_known(self):
+        port = SerialPort()
+        board, factory = self.board(port, protocol="LCUS")
+        board.apply({1: None, 2: None}, 0)
+        factory.assert_not_called()
+        board.apply({1: True, 2: None}, 1)
+        self.assertEqual(port.writes, [b"\xa0\x01\x01\xa2"])
+        board.apply({1: None, 2: False}, 2)
+        self.assertEqual(board.applied, {1: True, 2: False})
+        self.assertEqual(port.writes[-1], b"\xa0\x02\x00\xa2")
+
     def test_command_ack_failure_does_not_claim_success_and_retries_current_demand(self):
         bad, good = SerialPort([b"OK\r\n", b"ERROR\r\n"]), SerialPort([b"OK\r\n"] * 2)
         board, factory = self.board(bad, good)
@@ -341,6 +358,15 @@ class BoardTests(unittest.TestCase):
         board.shutdown([1])
         self.assertTrue(port.closed)
         self.assertIsNone(board.port)
+
+    def test_shutdown_attempts_other_channels_after_one_command_fails(self):
+        port = SerialPort()
+        board, _ = self.board(port, protocol="LCUS")
+        board.apply({1: True, 2: True}, 0)
+        port.write_failure = lambda data: 0 if data[1] == 1 else len(data)
+        board.shutdown([1, 2])
+        self.assertEqual(port.writes[-2:], [b"\xa0\x01\x00\xa1", b"\xa0\x02\x00\xa2"])
+        self.assertTrue(port.closed)
 
 
 class RunTests(unittest.TestCase):
