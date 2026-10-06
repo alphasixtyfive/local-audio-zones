@@ -1,0 +1,14 @@
+--- a/src/pulse_sink.cpp
++++ b/src/pulse_sink.cpp
+@@ -704,8 +704,10 @@
+     attr.minreq = static_cast<uint32_t>(-1);
+     attr.fragsize = static_cast<uint32_t>(-1);
+ 
++    // Keep a named output fixed instead of rescuing its stream to a different sink.
+     const auto flags = static_cast<pa_stream_flags_t>(
+-        PA_STREAM_ADJUST_LATENCY | PA_STREAM_INTERPOLATE_TIMING | PA_STREAM_AUTO_TIMING_UPDATE);
++        PA_STREAM_ADJUST_LATENCY | PA_STREAM_INTERPOLATE_TIMING | PA_STREAM_AUTO_TIMING_UPDATE |
++        (this->device_.empty() ? PA_STREAM_NOFLAGS : PA_STREAM_DONT_MOVE));
+     const char* device = this->device_.empty() ? nullptr : this->device_.c_str();
+ 
+     {

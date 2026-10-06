@@ -1,0 +1,324 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  preflight:
+    name: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check the tag names the version the add-on manifest declares
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          manifest=local_audio_zones/config.yaml
+          [ -f "$manifest" ] || {
+            echo "::error::$manifest does not exist -- there is no version to publish against"
+            exit 1
+          }
+
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "::error::tag $TAG is not vMAJOR.MINOR.PATCH; this workflow publishes releases only"
+            exit 1
+          }
+
+          pattern='^version:[[:space:]]*"?[0-9]+\.[0-9]+\.[0-9]+"?[[:space:]]*$'
+          matches="$(grep -cE "$pattern" "$manifest" || true)"
+          [ "$matches" = 1 ] || {
+            echo "::error::expected exactly one MAJOR.MINOR.PATCH version: line in $manifest, found $matches"
+            exit 1
+          }
+          version="$(sed -nE 's/^version:[[:space:]]*"?([0-9]+\.[0-9]+\.[0-9]+)"?[[:space:]]*$/\1/p' "$manifest")"
+
+          echo "tag $TAG, $manifest version $version"
+          [ "$TAG" = "v$version" ] || {
+            echo "::error::tag $TAG does not match $manifest version $version -- bump one to match the other"
+            exit 1
+          }
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+  publish:
+    name: ${{ matrix.arch }}
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            expect_arch: amd64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            expect_arch: arm64
+    env:
+      REPO: ghcr.io/${{ github.repository }}
+    steps:
+      - name: Select image repository
+        run: echo "REPO=${REPO,,}" >>"$GITHUB_ENV"
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to the registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push this architecture by digest
+        id: push
+        env:
+          BUILD_VERSION: ${{ needs.preflight.outputs.version }}
+        run: |
+          docker buildx build \
+            --build-arg "BUILD_ARCH=${{ matrix.arch }}" \
+            --build-arg "BUILD_VERSION=$BUILD_VERSION" \
+            --provenance=false \
+            --sbom=false \
+            --metadata-file metadata.json \
+            --output "type=image,name=$REPO,push-by-digest=true,name-canonical=true,push=true" \
+            local_audio_zones
+          digest="$(jq -er '."containerimage.digest"' metadata.json)"
+          echo "pushed $REPO@$digest"
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+
+      - name: Pull back what was pushed
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: docker pull "$REPO@$DIGEST"
+
+      - name: Check the image is the architecture this leg builds for
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          EXPECT_ARCH: ${{ matrix.expect_arch }}
+        run: |
+          arch="$(docker image inspect --format '{{.Architecture}}' "$REPO@$DIGEST")"
+          echo "image architecture: $arch"
+          [ "$arch" = "$EXPECT_ARCH" ] || {
+            echo "::error::pushed a $arch image on the $EXPECT_ARCH leg -- check BUILD_ARCH"
+            exit 1
+          }
+
+      - name: Make sure apparmor_parser is installed
+        run: |
+          if ! command -v apparmor_parser >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends apparmor
+          fi
+
+      - name: Smoke test the native app
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: scripts/smoke_test.sh "$REPO@$DIGEST" --require-apparmor
+
+      - name: Test USB amplifier triggers
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          docker run --rm --network none --entrypoint python3 \
+            --env PYTHONDONTWRITEBYTECODE=1 --volume "$PWD:/repo:ro" \
+            "$REPO@$DIGEST" /repo/scripts/usb_triggers_test.py
+
+      - name: Test USB trigger supervision
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: scripts/usb_trigger_service_test.sh "$REPO@$DIGEST"
+
+      - name: Record the digest for the manifest job
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p digests
+          printf '%s' "$DIGEST" >"digests/$ARCH"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/
+          if-no-files-found: error
+
+  manifest:
+    name: manifest
+    needs: [preflight, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REPO: ghcr.io/${{ github.repository }}
+      VERSION: ${{ needs.preflight.outputs.version }}
+    steps:
+      - name: Select image repository
+        run: echo "REPO=${REPO,,}" >>"$GITHUB_ENV"
+
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Download the digests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: digests
+          merge-multiple: true
+
+      - name: Check every architecture reported a digest
+        run: |
+          found="$(find digests -maxdepth 1 -type f -exec basename {} \; | sort | tr '\n' ' ')"
+          expected='aarch64 amd64 '
+          echo "digests received from: $found"
+          [ "$found" = "$expected" ] || {
+            echo "::error::expected digests from '$expected' but got '$found'"
+            exit 1
+          }
+          for arch in aarch64 amd64; do
+            grep -Eq '^sha256:[0-9a-f]{64}$' "digests/$arch" || {
+              echo "::error::digests/$arch is not a sha256 digest: $(cat "digests/$arch")"
+              exit 1
+            }
+          done
+
+      - name: Log in to the registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assemble and push the multi-architecture manifest
+        run: |
+          docker buildx imagetools create \
+            --tag "$REPO:$VERSION" \
+            --tag "$REPO:latest" \
+            "$REPO@$(cat digests/amd64)" \
+            "$REPO@$(cat digests/aarch64)"
+
+      - name: Check the published manifest lists both architectures
+        run: |
+          platforms="$(docker buildx imagetools inspect --raw "$REPO:$VERSION" |
+            jq -r '.manifests[].platform | "\(.os)/\(.architecture)"' | sort | tr '\n' ' ')"
+          echo "published platforms: $platforms"
+          [ "$platforms" = 'linux/amd64 linux/arm64 ' ] || {
+            echo "::error::$REPO:$VERSION lists '$platforms', expected 'linux/amd64 linux/arm64 '"
+            exit 1
+          }
+          echo "published $REPO:$VERSION and $REPO:latest"
+
+  release:
+    name: release
+    needs: [preflight, manifest]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      REPO: ghcr.io/${{ github.repository }}
+      VERSION: ${{ needs.preflight.outputs.version }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Select image repository
+        run: echo "REPO=${REPO,,}" >>"$GITHUB_ENV"
+
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check whether this tag already has a release
+        id: existing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName >/dev/null 2>&1; then
+            echo "$TAG already has a release -- leaving it alone"
+            echo "exists=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Find the release this one follows
+        id: previous
+        if: steps.existing.outputs.exists != 'true'
+        run: |
+          tags="$(git tag --list --merged "$TAG")"
+          versions="$(sed -nE 's/^## ([0-9]+\.[0-9]+\.[0-9]+)[[:space:]]*$/\1/p' local_audio_zones/CHANGELOG.md)"
+          previous="$(printf '%s\n' "$tags" | awk -v current="${TAG#v}" -v versions="$versions" '
+            function below(x, y,   i) {
+              for (i = 1; i <= 3; i++)
+                if (x[i] + 0 != y[i] + 0) return x[i] + 0 < y[i] + 0
+              return 0
+            }
+            BEGIN {
+              split(current, want, ".")
+              split(versions, list, /[[:space:]]+/)
+              for (i in list) released[list[i]] = 1
+            }
+            /^v[0-9]+\.[0-9]+\.[0-9]+$/ {
+              if (!(substr($0, 2) in released)) next
+              split(substr($0, 2), this, ".")
+              if (!below(this, want)) next
+              if (best == "" || below(high, this)) {
+                best = substr($0, 2)
+                split(best, high, ".")
+              }
+            }
+            END { print best }')"
+
+          if [ -z "$previous" ]; then
+            echo "no earlier app release precedes $TAG"
+          else
+            echo "$TAG follows v$previous"
+          fi
+          echo "previous=$previous" >>"$GITHUB_OUTPUT"
+
+      - name: Write the release notes
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          PREVIOUS: ${{ steps.previous.outputs.previous }}
+        run: |
+          scripts/release_notes.sh \
+            --version "$VERSION" \
+            --previous "$PREVIOUS" \
+            --image "$REPO" \
+            >"$RUNNER_TEMP/release-notes.md"
+          cat "$RUNNER_TEMP/release-notes.md"
+
+      - name: Create the release
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$VERSION" \
+            --prerelease \
+            --notes-file "$RUNNER_TEMP/release-notes.md"

@@ -1,0 +1,15 @@
+#!/command/with-contenv bash
+set -euo pipefail
+
+source /usr/lib/sendspin-cli/common.sh
+
+decision=$(sendspin::daemon_decision)
+
+if [ "${decision}" != 'yes' ]; then
+    exec /command/s6-pause
+fi
+
+mkdir -p /run/dbus
+rm -f /run/dbus/pid
+
+exec dbus-daemon --system --nofork

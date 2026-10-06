@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source /usr/lib/sendspin-cli/common.sh
+source /usr/lib/sendspin-cli/players.sh
+
+# s6-svscan passes the service directory name, which is the validated zone id.
+sendspin::player_paths "$1"
+
+# Avahi supports silencing the linkage notice for Bonjour-based clients.
+AVAHI_COMPAT_NOWARN=1 exec sendspin-cli \
+    --config "${player_conf}" \
+    --state-dir "${player_state_dir}" \
+    --control-socket "${player_control_socket}"

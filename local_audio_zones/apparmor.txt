@@ -1,0 +1,141 @@
+#include <tunables/global>
+
+# Supervisor replaces this name with the installed app slug.
+profile local_audio_zones flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # s6 must stop child daemons after they drop privileges.
+  capability kill,
+
+  file,
+
+  signal (send) set=(kill,term,int,hup,cont,usr1,usr2),
+
+  /init ix,
+  /bin/** ix,
+  /usr/bin/** ix,
+  /usr/sbin/** ix,
+  /command/** ix,
+  /package/** ix,
+  /etc/s6-overlay/** r,
+  /run/{s6,s6-rc*,service}/** rwix,
+  /run/s6-linux-init-container-results/** rw,
+
+  # Options and routing helpers stay outside the network-facing player profile.
+  /usr/lib/sendspin-cli/** r,
+  /usr/lib/sendspin-cli/decide-daemons ix,
+  /usr/lib/sendspin-cli/player-run ix,
+  /usr/lib/sendspin-cli/usb-trigger-run ix,
+
+  network unix stream,
+  network unix dgram,
+
+  /run/sendspin-cli/** rw,
+  /data/** rw,
+  /run/** rwk,
+  /tmp/** rw,
+
+  deny /etc/shadow rw,
+  deny /etc/gshadow rw,
+  deny /etc/{passwd,group} w,
+
+  /usr/bin/dbus-daemon cx,
+  /usr/sbin/avahi-daemon cx,
+  /usr/bin/sendspin-cli cx,
+
+  profile /usr/bin/dbus-daemon flags=(attach_disconnected,mediate_deleted) {
+    #include <abstractions/base>
+
+    capability setgid,
+    capability setuid,
+
+    signal (receive) set=(kill,term,int,hup,cont,usr1,usr2),
+
+    /usr/bin/dbus-daemon mr,
+    /usr/share/dbus-1/** r,
+    /etc/dbus-1/** r,
+    /var/lib/dbus/machine-id r,
+    /etc/nsswitch.conf r,
+    /etc/passwd r,
+    /etc/group r,
+    /run/dbus/ rw,
+    /run/dbus/** rwk,
+
+    network unix stream,
+    network unix dgram,
+  }
+
+  profile /usr/sbin/avahi-daemon flags=(attach_disconnected,mediate_deleted) {
+    #include <abstractions/base>
+    #include <abstractions/nameservice>
+
+    capability setgid,
+    capability setuid,
+    capability sys_chroot,
+    capability chown,
+
+    signal (receive) set=(kill,term,int,hup,cont,usr1,usr2),
+
+    /usr/sbin/avahi-daemon mr,
+    /etc/avahi/** r,
+    /run/avahi-daemon/ rw,
+    /run/avahi-daemon/** rwk,
+    /run/dbus/system_bus_socket rw,
+    @{PROC}/sys/net/ipv{4,6}/** r,
+
+    network inet dgram,
+    network inet6 dgram,
+    network netlink dgram,
+    network unix stream,
+    network unix dgram,
+  }
+
+  # The player and its hooks have no capabilities and only the paths below.
+  profile /usr/bin/sendspin-cli flags=(attach_disconnected,mediate_deleted) {
+    #include <abstractions/base>
+    #include <abstractions/nameservice>
+
+    signal (receive) set=(kill,term,int,hup,cont,usr1,usr2),
+
+    /usr/bin/sendspin-cli mr,
+
+    /etc/ssl/** r,
+    /usr/share/ca-certificates/** r,
+
+    owner /root/.config/ w,
+    owner /root/.config/pulse/ w,
+    owner /root/.config/pulse/** rwk,
+
+    /run/sendspin-cli/** rwk,
+    /data/zones/** rw,
+
+    /usr/lib/**/alsa-lib/*.so mr,
+    /usr/share/alsa/** r,
+    /etc/alsa/** r,
+    /etc/asound.conf r,
+    /dev/snd/ r,
+    /dev/snd/** rw,
+    @{PROC}/asound/** r,
+    /sys/class/sound/** r,
+    /sys/devices/**/sound/** r,
+
+    /etc/pulse/** r,
+    /run/audio/** rw,
+    /dev/shm/ r,
+    /dev/shm/** rw,
+    /var/lib/dbus/machine-id r,
+
+    /run/dbus/system_bus_socket rw,
+    /run/avahi-daemon/socket rw,
+
+    network inet stream,
+    network inet6 stream,
+    network inet dgram,
+    network inet6 dgram,
+    network unix stream,
+    network unix dgram,
+
+    # Playback commands inherit this player's confinement.
+    /usr/bin/** ix,
+  }
+}

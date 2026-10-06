@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+source /usr/lib/sendspin-cli/common.sh
+source /usr/lib/sendspin-cli/players.sh
+
+# A player answers even when idle or disconnected from a Music Assistant server.
+ids=$(jq -r '.[].id' "${SENDSPIN_PLAYERS_FILE}")
+while IFS= read -r id; do
+    [ -n "${id}" ] || continue
+    sendspin::player_paths "${id}"
+    if ! timeout 2 sendspin-cli status --control-socket "${player_control_socket}" > /dev/null; then
+        sendspin::log "Player ${id} is not responding on its control socket."
+        exit 1
+    fi
+done <<< "${ids}"
+
+if jq -e '(.usb_relays // []) | length > 0' /data/options.json > /dev/null; then
+    if [ "$(s6-svstat -o up "${SENDSPIN_RUN_DIR}/services/_usb-triggers")" != true ]; then
+        sendspin::log 'The USB amplifier trigger service is not running.'
+        exit 1
+    fi
+fi
+
+decision=$(sendspin::daemon_decision)
+if [ "${decision}" = yes ]; then
+    for service in dbus avahi; do
+        if [ "$(s6-svstat -o up "/run/service/${service}")" != true ]; then
+            sendspin::log "The bundled ${service} service is not running."
+            exit 1
+        fi
+    done
+fi

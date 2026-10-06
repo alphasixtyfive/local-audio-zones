@@ -1,0 +1,144 @@
+name: Build
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Lint the workflows
+        run: |
+          docker run --rm --volume "$PWD:/repo" --workdir /repo \
+            rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 \
+            -color
+      - name: Lint the shell scripts
+        # Resolve installed absolute sources inside the checked-out rootfs.
+        run: |
+          shellcheck --shell=bash --external-sources --source-path=local_audio_zones/rootfs \
+            local_audio_zones/rootfs/usr/bin/container-healthcheck \
+            local_audio_zones/rootfs/usr/lib/sendspin-cli/decide-daemons \
+            local_audio_zones/rootfs/usr/lib/sendspin-cli/player-run \
+            local_audio_zones/rootfs/usr/lib/sendspin-cli/usb-trigger-run \
+            local_audio_zones/rootfs/etc/s6-overlay/s6-rc.d/*/run \
+            local_audio_zones/rootfs/etc/s6-overlay/s6-rc.d/*/finish
+          shellcheck -x --source-path=SCRIPTDIR scripts/*.sh
+      - name: Test the pactl parsing
+        run: scripts/pactl_parse_test.sh
+
+      - name: Test zone configuration
+        run: sudo bash scripts/multi_zone_test.sh
+      - name: Test the security-rating check
+        run: scripts/security_rating_test.sh
+      - name: Test the release-notes assembly
+        run: scripts/release_notes_test.sh
+  addon-lint:
+    name: add-on manifest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Lint the add-on manifest
+        uses: frenck/action-addon-linter@b9cfd1bc62ba60d2c4fc96317b5f7ada5923f4a7 # v2.21.1
+        with:
+          path: ./local_audio_zones
+      - name: Check the add-on's security rating
+        run: scripts/security_rating.sh
+      - name: Make sure apparmor_parser is installed
+        run: |
+          if ! command -v apparmor_parser >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends apparmor
+          fi
+      - name: Parse the AppArmor profile
+        run: scripts/apparmor_check.sh
+
+  build:
+    name: ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            expect_arch: amd64
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            expect_arch: arm64
+    env:
+      IMAGE: local-audio:ci
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build the image
+        run: docker build --build-arg "BUILD_ARCH=${{ matrix.arch }}" --tag "$IMAGE" local_audio_zones
+
+      - name: Check dependency notices in the image
+        run: |
+          (cd local_audio_zones/licenses && sha256sum -- *) > notices.sha256
+          docker run --rm --network none --entrypoint bash \
+            --volume "$PWD/notices.sha256:/tmp/notices.sha256:ro" "$IMAGE" \
+            -ec 'cd /usr/share/doc/local-audio-zones/licenses; sha256sum --check /tmp/notices.sha256'
+
+      - name: Check the image is the architecture this leg builds for
+        env:
+          EXPECT_ARCH: ${{ matrix.expect_arch }}
+        run: |
+          arch="$(docker image inspect --format '{{.Architecture}}' "$IMAGE")"
+          echo "image architecture: $arch"
+          [ "$arch" = "$EXPECT_ARCH" ] || {
+            echo "::error::built a $arch image on the $EXPECT_ARCH leg -- check BUILD_ARCH"
+            exit 1
+          }
+      - name: Make sure apparmor_parser is installed
+        run: |
+          if ! command -v apparmor_parser >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends apparmor
+          fi
+      - name: Smoke test the native app
+        run: scripts/smoke_test.sh "$IMAGE" --require-apparmor
+
+      - name: Test independent zone recovery and shutdown
+        run: scripts/multi_zone_supervision_test.sh "$IMAGE"
+
+      - name: Test native device and channel routing
+        run: |
+          docker run --rm --network none --entrypoint python3 \
+            --env PYTHONDONTWRITEBYTECODE=1 --volume "$PWD:/repo:ro" \
+            "$IMAGE" /repo/scripts/audio_routing_test.py
+
+      - name: Test USB amplifier triggers
+        run: |
+          docker run --rm --network none --entrypoint python3 \
+            --env PYTHONDONTWRITEBYTECODE=1 --volume "$PWD:/repo:ro" \
+            "$IMAGE" /repo/scripts/usb_triggers_test.py
+
+      - name: Test USB trigger supervision
+        run: scripts/usb_trigger_service_test.sh "$IMAGE"
+
+      - name: Test named PulseAudio output isolation
+        run: |
+          docker build --build-arg PLAYER_IMAGE="$IMAGE" \
+            --file scripts/Dockerfile.audio-test --tag local-audio-audio-test scripts
+          docker run --rm --network none --volume "$PWD:/repo:ro" \
+            local-audio-audio-test /repo/scripts/pulse_isolation_test.py

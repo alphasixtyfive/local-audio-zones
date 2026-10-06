@@ -1,0 +1,85 @@
+configuration:
+  usb_relays:
+    name: Amplifier triggers
+    description: Optional USB serial relay channels. Assign player IDs, save and restart.
+    fields:
+      name:
+        name: Amplifier name
+      device:
+        name: USB relay device
+        description: Select only the relay port. Prefer /dev/serial/by-id/; use by-path for identical devices on fixed ports.
+      protocol:
+        name: Relay model
+        description: Match the board's documented protocol. The USB chipset does not identify the relay model.
+      channel:
+        name: Relay channel
+        description: Defaults to 1. DSD TECH and KMtronic use channel 1; LCUS supports 1 to 8.
+      zones:
+        name: Player IDs
+        description: Any listed zone receiving audio keeps this amplifier on. Use the IDs from Zones.
+      off_delay:
+        name: Standby delay
+        description: Seconds after all assigned zones stop receiving audio. Defaults to 60; zero switches off immediately.
+  zones:
+    name: Zones
+    description: Add one player per stereo output. Save and restart to apply changes.
+    fields:
+      id:
+        name: Player ID
+        description: Keep this ID when renaming the zone, for example sendspin-study.
+      name:
+        name: Zone name
+      device:
+        name: Soundcard device
+        description: Choose a soundcard control or playback device. Prefer /dev/snd/by-id/; use /dev/snd/by-path/ for identical cards on fixed ports.
+      channel_pair:
+        name: Output pair
+        description: >-
+          Defaults to Front left/right. Checked against the selected card's active channels.
+      channels:
+        name: Custom channels (advanced)
+        description: >-
+          Two channel names, such as aux0,aux1. Leave Output pair unset.
+          The Log tab lists the selected card's available channels.
+      output:
+        name: Explicit output (advanced)
+        description: >-
+          Alternative to Soundcard device. Use a native player output such as
+          pulse:my_stereo_sink. Leave Soundcard device, Output pair and Custom channels unset.
+      port:
+        name: Listen port
+        description: Must be unique; defaults to 8928 plus the zone position.
+      log_level:
+        name: Log level
+        description: Inherits the app log level when omitted.
+      server:
+        name: Music Assistant server
+        description: Inherits the app setting; an empty value restores player discovery.
+      buffer_ms:
+        name: Audio buffer
+        description: Inherits the app setting; leave unset unless needed, 10 to 2000 ms.
+      hook_start:
+        name: Playback start command
+        description: Inherits the app command; an empty value disables it for this zone.
+      hook_stop:
+        name: Playback stop command
+        description: Inherits the app command; an empty value disables it for this zone.
+  log_level:
+    name: Log level
+    description: Defaults to info for all zones.
+  server:
+    name: Music Assistant server
+    description: >-
+      Leave unset for player discovery, or use mdns:<name> for a specific server.
+  buffer_ms:
+    name: Audio buffer
+    description: >-
+      Leave unset for the native default; accepts 10 to 2000 milliseconds.
+  hook_start:
+    name: Playback start command
+    description: >-
+      Optional shell command run inside the app when a stream starts, without
+      blocking playback. Commands run as root within the app's confinement.
+  hook_stop:
+    name: Playback stop command
+    description: Optional shell command run inside the app when a stream stops.
