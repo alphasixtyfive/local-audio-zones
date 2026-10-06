@@ -225,7 +225,7 @@ def main():
             spec.loader.exec_module(routing)
 
             def private_pactl(*arguments):
-                # A null master has no hardware card. Supply that identity only;
+                # A null master has no hardware card or PCM. Supply those identities only;
                 # module creation, arguments, sink properties and cleanup stay native.
                 if arguments == ("--format=json", "list", "cards"):
                     return json.dumps([{"index": 41, "properties": {"alsa.card": "7"}},
@@ -237,6 +237,7 @@ def main():
                         if sink["name"] == "physical":
                             sink.pop("card", None)
                             sink["properties"]["alsa.card"] = "7"
+                            sink["properties"]["alsa.device"] = "0"
                             sink["description"] = 'Private "USB" café card'
                         elif sink["name"] == "aux_physical":
                             sink.pop("card", None)
@@ -244,14 +245,15 @@ def main():
                     return json.dumps(sinks)
                 return result.rstrip("\n")
 
-            routes = routing.AudioRoutes(pactl=private_pactl, device_resolver=lambda _: 7,
+            routes = routing.AudioRoutes(pactl=private_pactl,
+                                         device_resolver=lambda device: (7, 0 if device == "/dev/snd/pcmC7D0p" else None),
                                          registry=work / "owned-routes.json")
             def master_volume():
                 return next(item["volume"] for item in json.loads(pactl("--format=json", "list", "sinks"))
                             if item["name"] == "physical")
 
             original_master_volume = master_volume()
-            player = {"id": "rear", "name": 'Rear "room" café', "device": "/dev/snd/controlC7", "channel_pair": "rear"}
+            player = {"id": "rear", "name": 'Rear "room" café', "device": "/dev/snd/pcmC7D0p", "channel_pair": "rear"}
             try:
                 routes.resolve([player, {**player, "id": "alias", "device": "/dev/snd/by-id/private-usb-card"}])
             except routing.RoutingError:
@@ -307,7 +309,7 @@ def main():
             channel_map = ",".join("aux" + str(index) for index in range(8))
             aux_master = pactl("load-module", "module-null-sink", "sink_name=aux_physical",
                                "rate=48000", "channels=8", "channel_map=" + channel_map).strip()
-            custom_routes = routing.AudioRoutes(pactl=private_pactl, device_resolver=lambda _: 8,
+            custom_routes = routing.AudioRoutes(pactl=private_pactl, device_resolver=lambda _: (8, None),
                                                 registry=work / "custom-routes.json")
             custom = {"id": "custom", "name": "Custom room", "device": "/dev/snd/controlC8",
                       "channels": ["aux5", "aux4"]}

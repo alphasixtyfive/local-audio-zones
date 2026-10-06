@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Honour the selected playback PCM on soundcards with several active outputs.
+- List matching output names when a soundcard selection is ambiguous.
+
 ## 0.1.0
 
 First release.

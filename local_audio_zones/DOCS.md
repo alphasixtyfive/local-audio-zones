@@ -23,6 +23,11 @@ These links are accepted but are not offered by the native picker. Keep the
 cards on fixed physical ports and verify their outputs after a full reboot.
 Numeric control/playback selections can change when card order changes.
 
+On cards with several active outputs, a playback device selects its specific
+PCM endpoint; a control device selects the whole card. The host audio profile
+must expose that endpoint. Ambiguous selections list the matching output names
+in the Log tab rather than choosing one automatically.
+
 | Pair | Channels |
 | --- | --- |
 | Front left/right | `front-left,front-right` |

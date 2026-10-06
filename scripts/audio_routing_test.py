@@ -28,10 +28,10 @@ class PulseFixture:
         ]
         self.sinks = [
             {"index": 20, "name": "usb_card_a", "owner_module": 1,
-             "description": 'USB "Card A"', "properties": {"device.class": "sound", "alsa.card": "4"},
+             "description": 'USB "Card A"', "properties": {"device.class": "sound", "alsa.card": "4", "alsa.device": "0"},
              "channel_map": "front-left,front-right,rear-left,rear-right,front-center,lfe,side-left,side-right"},
             {"index": 21, "name": "usb_card_b", "owner_module": 2,
-             "properties": {"device.class": "sound", "alsa.card": "7"}, "channel_map": "front-left,front-right"},
+             "properties": {"device.class": "sound", "alsa.card": "7", "alsa.device": "0"}, "channel_map": "front-left,front-right"},
             {"index": 22, "name": "unrelated_default", "owner_module": 3,
              "channel_map": "front-left,front-right"},
         ]
@@ -107,10 +107,11 @@ class RoutingTests(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.registry = Path(self.temporary.name) / "owned.json"
         self.pulse = PulseFixture()
-        devices = {"/dev/snd/controlC4": 4, "/dev/snd/controlC7": 7,
-                   "/dev/snd/by-id/usb-card-a": 4, "/dev/snd/pcmC4D0p": 4,
-                   "/dev/snd/by-path/pci-0000:00:14.0-usb-0:1:1.0": 4,
-                   "/dev/snd/by-path/pci-0000:00:14.0-usb-0:2:1.0": 7}
+        devices = {"/dev/snd/controlC4": (4, None), "/dev/snd/controlC7": (7, None),
+                   "/dev/snd/by-id/usb-card-a": (4, None), "/dev/snd/pcmC4D0p": (4, 0),
+                   "/dev/snd/pcmC4D3p": (4, 3),
+                   "/dev/snd/by-path/pci-0000:00:14.0-usb-0:1:1.0": (4, None),
+                   "/dev/snd/by-path/pci-0000:00:14.0-usb-0:2:1.0": (7, None)}
         self.routes = audio_routes.AudioRoutes(pactl=self.pulse,
                                              device_resolver=devices.__getitem__,
                                              registry=self.registry)
@@ -237,8 +238,11 @@ class RoutingTests(unittest.TestCase):
 
     def test_device_alias_resolution_requires_a_sound_character_device(self):
         alias = "/dev/snd/by-path/pci-0000:00:14.0-usb-0:1:1.0"
-        for target, character, expected in (("/dev/snd/controlC4", True, 4),
-                                            ("/dev/snd/pcmC4D0p", True, 4),
+        for target, character, expected in (("/dev/snd/controlC4", True, (4, None)),
+                                            ("/dev/snd/pcmC4D0p", True, (4, 0)),
+                                            ("/dev/snd/pcmC14D3p", True, (14, 3)),
+                                            ("/dev/snd/controlC4D0p", True, None),
+                                            ("/dev/snd/pcmC4", True, None),
                                             ("/dev/snd/controlC4", False, None),
                                             ("/dev/snd/pcmC4D0c", True, None),
                                             ("/dev/null", True, None)):
@@ -249,9 +253,9 @@ class RoutingTests(unittest.TestCase):
                     patch.object(Path, "resolve", return_value=resolved):
                 if expected is None:
                     with self.assertRaises(audio_routes.RoutingError):
-                        audio_routes.device_card(alias)
+                        audio_routes.device_endpoint(alias)
                 else:
-                    self.assertEqual(audio_routes.device_card(alias), expected)
+                    self.assertEqual(audio_routes.device_endpoint(alias), expected)
 
     def test_custom_channels_report_the_actual_available_map(self):
         self.pulse.sinks[0]["channel_map"] = "aux0,aux1,aux2,aux3"
@@ -466,6 +470,51 @@ class RoutingTests(unittest.TestCase):
             self.routes.resolve([room()])
         self.assertEqual(self.pulse.mutations(), [])
 
+    def second_pcm(self):
+        sink = copy.deepcopy(self.pulse.sinks[0])
+        sink.update(name="digital_output", index=30, channel_map="front-left,front-right")
+        sink["properties"]["alsa.device"] = "3"
+        self.pulse.sinks.append(sink)
+
+    def test_playback_node_selects_the_exact_pcm_on_a_multi_pcm_card(self):
+        self.second_pcm()
+        self.routes.resolve([room("analog", device="/dev/snd/pcmC4D0p"),
+                             room("digital", device="/dev/snd/pcmC4D3p")])
+        self.assertIn("master=usb_card_a ", self.pulse.modules[0]["argument"])
+        self.assertIn("master=digital_output ", self.pulse.modules[1]["argument"])
+
+    def test_missing_pcm_does_not_use_another_output_on_the_card(self):
+        for metadata in ("0", None):
+            with self.subTest(metadata=metadata):
+                self.pulse.sinks[0]["properties"]["alsa.device"] = metadata
+                with self.assertRaisesRegex(audio_routes.RoutingError, "PCM 3 has no active"):
+                    self.routes.resolve([room(device="/dev/snd/pcmC4D3p")])
+                self.assertEqual(self.pulse.mutations(), [])
+
+    def test_selected_pcm_does_not_take_channels_from_a_different_pcm(self):
+        self.second_pcm()
+        with self.assertRaisesRegex(audio_routes.RoutingError, "available channels: front-left, front-right"):
+            self.routes.resolve([room(pair="rear", device="/dev/snd/pcmC4D3p")])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_control_node_lists_ambiguous_pcm_outputs(self):
+        self.second_pcm()
+        with self.assertRaisesRegex(audio_routes.RoutingError, "usb_card_a, digital_output"):
+            self.routes.resolve([room()])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_playback_node_does_not_guess_between_sinks_on_the_same_pcm(self):
+        self.second_pcm()
+        self.pulse.sinks[-1]["properties"]["alsa.device"] = 0
+        with self.assertRaisesRegex(audio_routes.RoutingError, "more than one active output"):
+            self.routes.resolve([room(device="/dev/snd/pcmC4D0p")])
+        self.assertEqual(self.pulse.mutations(), [])
+
+    def test_control_node_can_select_a_unique_channel_pair_on_a_multi_pcm_card(self):
+        self.second_pcm()
+        self.routes.resolve([room(pair="rear")])
+        self.assertIn("master=usb_card_a ", self.pulse.modules[0]["argument"])
+
     def test_ambiguous_remaps_are_rejected(self):
         self.pulse.remap()
         self.pulse.remap("another_front", index=51)
@@ -504,7 +553,7 @@ class RoutingTests(unittest.TestCase):
     def test_container_replacement_preserves_owned_routes_for_cleanup(self):
         self.pulse.remap("host_rear", channels="rear-left,rear-right")
         first = self.routes.resolve([room()])
-        replacement = audio_routes.AudioRoutes(pactl=self.pulse, device_resolver=lambda _: 4,
+        replacement = audio_routes.AudioRoutes(pactl=self.pulse, device_resolver=lambda _: (4, None),
                                                registry=self.registry)
         self.assertEqual(replacement.resolve([room()]), first)
         self.assertEqual(len([call for call in self.pulse.calls if call[0] == "load-module"]), 1)
@@ -518,7 +567,7 @@ class RoutingTests(unittest.TestCase):
         with self.assertRaises(audio_routes.RoutingError):
             self.routes.cleanup()
         self.assertEqual([record["index"] for record in json.loads(self.registry.read_text())], [100])
-        replacement = audio_routes.AudioRoutes(pactl=self.pulse, device_resolver=lambda _: 4,
+        replacement = audio_routes.AudioRoutes(pactl=self.pulse, device_resolver=lambda _: (4, None),
                                                registry=self.registry)
         self.pulse.fail_unload.clear()
         replacement.cleanup()
@@ -527,7 +576,7 @@ class RoutingTests(unittest.TestCase):
 
     def test_cold_start_cleanup_allows_changed_channels_for_the_same_room(self):
         self.routes.resolve([room()])
-        replacement = audio_routes.AudioRoutes(pactl=self.pulse, device_resolver=lambda _: 4,
+        replacement = audio_routes.AudioRoutes(pactl=self.pulse, device_resolver=lambda _: (4, None),
                                                registry=self.registry)
         replacement.cleanup()
         result = replacement.resolve([room(pair="rear")])
@@ -538,7 +587,7 @@ class RoutingTests(unittest.TestCase):
     def test_cold_start_cleanup_removes_owned_routes_when_all_rooms_are_deleted(self):
         self.pulse.remap("host_rear", channels="rear-left,rear-right")
         self.routes.resolve([room()])
-        replacement = audio_routes.AudioRoutes(pactl=self.pulse, device_resolver=lambda _: 4,
+        replacement = audio_routes.AudioRoutes(pactl=self.pulse, device_resolver=lambda _: (4, None),
                                                registry=self.registry)
         replacement.cleanup()
         self.assertEqual(replacement.resolve([]), [])
