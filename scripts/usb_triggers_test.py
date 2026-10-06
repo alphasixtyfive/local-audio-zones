@@ -16,6 +16,7 @@ from unittest.mock import Mock, patch
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "local_audio_zones/rootfs/usr/lib/sendspin-cli/usb_triggers.py"
+sys.path.insert(0, str(SOURCE.parent))
 SPEC = importlib.util.spec_from_file_location("usb_triggers", SOURCE)
 relay = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = relay
@@ -42,18 +43,20 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual([item.channel for item in self.config(entries)], [1, 8])
 
     def test_explicit_usb_device_paths(self):
-        for device in ("/dev/ttyUSB3", "/dev/ttyACM12", "/dev/serial/by-path/pci-usb-relay"):
+        for device in ("/dev/ttyUSB3", "/dev/ttyACM12", "/dev/serial/by-path/pci-usb-relay",
+                       "/dev/ttyS0", "/dev/ttyAMA0", "/dev/relays/amplifier"):
             with self.subTest(device=device):
                 self.assertEqual(self.config([dict(ENTRY, device=device)])[0].device, device)
 
     def test_rejects_invalid_fields_before_opening_hardware(self):
         bad = [
             {"name": ""}, {"name": "Bad\nName"}, {"name": "Bad\x7fName"},
-            {"device": "/dev/ttyS0"}, {"device": "/dev/serial/by-id/../ttyUSB0"},
+            {"device": "/dev/"}, {"device": "/dev//relay"},
+            {"device": "/dev/serial/by-id/../ttyUSB0"},
             {"device": "/dev/serial/by-id/.."}, {"device": "/dev/ttyUSB0 "},
             {"device": "/tmp/relay"}, {"protocol": "automatic"},
             {"channel": True}, {"channel": 0}, {"channel": 2}, {"channel": "1"},
-            {"off_delay": True}, {"off_delay": -1}, {"off_delay": 3601},
+            {"off_delay": True}, {"off_delay": -1},
             {"off_delay": 0.5}, {"zones": []}, {"zones": "study"},
             {"zones": ["missing"]}, {"zones": ["study", "study"]},
             {"zones": [True]}, {"startup_command": "shell command"},
@@ -63,11 +66,18 @@ class ConfigurationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.config([dict(ENTRY, **fields)])
 
-    def test_rejects_bad_collection_shape_and_limit(self):
-        for entries in (None, {}, "relay", [None], [ENTRY] * 17):
+    def test_rejects_bad_collection_shape(self):
+        for entries in (None, {}, "relay", [None]):
             with self.subTest(entries=entries):
                 with self.assertRaises(ValueError):
                     self.config(entries)
+
+    def test_relay_count_and_standby_delay_have_no_arbitrary_ceiling(self):
+        entries = [dict(ENTRY, device=f"/dev/serial/by-id/usb-relay-{index}", off_delay=7200)
+                   for index in range(24)]
+        triggers = self.config(entries)
+        self.assertEqual(len(triggers), 24)
+        self.assertTrue(all(trigger.off_delay == 7200 for trigger in triggers))
 
     def test_rejects_duplicate_channel_and_conflicting_protocol(self):
         for second in (ENTRY, dict(ENTRY, protocol="KMtronic")):
@@ -89,6 +99,13 @@ class ConfigurationTests(unittest.TestCase):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_native_settings_offer_the_supported_protocols(self):
+        manifest = Path(__file__).resolve().parents[1] / "local_audio_zones/config.yaml"
+        line = next(line for line in manifest.read_text().splitlines()
+                    if line.strip().startswith("protocol: list("))
+        choices = line.split("list(", 1)[1].removesuffix(")").split("|")
+        self.assertEqual(set(choices), set(relay.PROTOCOLS))
+
     def test_known_wire_frames(self):
         cases = [
             ("DSD TECH SH-UR01A", 1, True, b"AT+CH1=1\r\n"),
@@ -195,6 +212,22 @@ class BoardTests(unittest.TestCase):
         factory = Mock(side_effect=ports)
         board = relay.Board(ENTRY["device"], protocol, factory)
         return board, factory
+
+    def test_another_protocol_needs_no_controller_special_cases(self):
+        from relay_protocols import Protocol
+
+        driver = Protocol(channels=3, baudrate=38400,
+                          encode=lambda channel, enabled: bytes((channel, int(enabled))),
+                          handshake=b"HELLO\n", acknowledgement=b"READY", error=b"FAILED")
+        port = SerialPort([b"READY\n", b"READY\n"])
+        with patch.dict(relay.PROTOCOLS, {"Fixture": driver}):
+            trigger, = relay.configuration(
+                {"usb_relays": [dict(ENTRY, protocol="Fixture", channel=3)]}, PLAYERS)
+            board, factory = self.board(port, protocol=trigger.protocol)
+            board.apply({trigger.channel: True}, 0)
+            self.assertEqual(factory.call_args.kwargs["baudrate"], 38400)
+            self.assertEqual(port.writes, [b"HELLO\n", b"\x03\x01"])
+            self.assertEqual(board.applied, {3: True})
 
     def test_serial_options_handshake_and_no_repeated_commands(self):
         port = SerialPort([b"AT\r\n", b"OK\r\n", b"OK\r\n"])

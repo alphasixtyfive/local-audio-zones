@@ -16,7 +16,7 @@ Assistant handles playback, volume and groups.
 3. Add your rooms in **Configuration**, save, then restart the app.
 
 Music Assistant and the app need working mDNS on the same local network.
-Version 0.1.1 is experimental.
+Version 0.1.2 is experimental.
 
 ## Configuration
 

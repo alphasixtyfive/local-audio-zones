@@ -37,6 +37,15 @@ Numeric `/dev/ttyUSB0` selections can change after a reboot. Use one device
 path consistently for every channel on the same board. The app never scans
 serial ports or guesses a relay protocol.
 
+Device selections are not tied to a particular chipset or Linux device name.
+Any serial device or link under `/dev` can be configured if it is exposed to
+the app. The protocol must match the relay. Standby delay accepts any
+nonnegative whole number of seconds; there is no fixed relay-count ceiling.
+
+Room assignments and device paths come from configuration. The controller has
+no room, card or relay-brand special cases. Protocol definitions live in one
+small module; adding a supported wire format does not change playback logic.
+
 ```yaml
 usb_relays:
   - name: Dayton amplifier

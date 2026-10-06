@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+- Keep relay protocol definitions separate from amplifier control.
+- Accept serial device names and links without chipset-specific assumptions.
+- Remove arbitrary relay-count and standby-delay limits.
+
 ## 0.1.1
 
 - Optional USB serial amplifier triggers in native app settings.

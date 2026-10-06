@@ -1,6 +1,6 @@
 # Modified for Local Audio Zones; upstream attribution is in NOTICE.
 name: Local Audio Zones
-version: "0.1.1"
+version: "0.1.2"
 slug: local_audio_zones
 url: https://github.com/alphasixtyfive/local-audio-zones
 description: Turn soundcard outputs into separate Music Assistant rooms.
@@ -36,7 +36,7 @@ schema:
       channel: int(1,8)?
       zones:
         - str
-      off_delay: int(0,3600)?
+      off_delay: int(0,)?
   zones:
     - name: str
       device: device(subsystem=sound)?

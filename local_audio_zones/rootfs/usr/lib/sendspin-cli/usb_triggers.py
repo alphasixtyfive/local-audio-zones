@@ -8,17 +8,16 @@ import json
 import logging
 import os
 from pathlib import Path
-import re
 import signal
 import socket
 import stat
 import threading
 import time
 
+from relay_protocols import PROTOCOLS, command
+
 LOG = logging.getLogger("usb-triggers")
 RUN = Path("/run/sendspin-cli")
-PROTOCOLS = {"DSD TECH SH-UR01A": 1, "KMtronic": 1, "LCUS": 8}
-DEVICE = re.compile(r"/dev/(?:serial/(?:by-id|by-path)/[^/]+|tty(?:USB|ACM)[0-9]+)\Z")
 
 
 @dataclass(frozen=True)
@@ -35,8 +34,8 @@ def configuration(options, players):
     if not isinstance(options, dict) or not isinstance(players, list):
         raise ValueError("Expected app options and a player list")
     entries = options.get("usb_relays", [])
-    if not isinstance(entries, list) or len(entries) > 16:
-        raise ValueError("usb_relays must be a list of at most 16 relay channels")
+    if not isinstance(entries, list):
+        raise ValueError("usb_relays must be a list")
     zone_ids = {player["id"] for player in players}
     result, channels, protocols, aliases = [], set(), {}, {}
     for index, entry in enumerate(entries):
@@ -52,15 +51,17 @@ def configuration(options, players):
             ):
                 raise ValueError(f"{label}.{key} must be nonempty text")
         device, protocol = entry["device"], entry["protocol"]
-        if not DEVICE.fullmatch(device) or Path(device).name in (".", ".."):
-            raise ValueError(f"{label}.device must be a USB serial device or stable serial link")
+        if not device.startswith("/dev/") or device != device.strip() or any(
+            part in ("", ".", "..") for part in device.split("/")[2:]
+        ):
+            raise ValueError(f"{label}.device must select a serial device or link under /dev")
         if protocol not in PROTOCOLS:
             raise ValueError(f"{label}.protocol must be one of {', '.join(PROTOCOLS)}")
         channel, delay = entry.get("channel", 1), entry.get("off_delay", 60)
-        if type(channel) is not int or not 1 <= channel <= PROTOCOLS[protocol]:
+        if type(channel) is not int or not 1 <= channel <= PROTOCOLS[protocol].channels:
             raise ValueError(f"{label}.channel is invalid for {protocol}")
-        if type(delay) is not int or not 0 <= delay <= 3600:
-            raise ValueError(f"{label}.off_delay must be a whole number from 0 to 3600")
+        if type(delay) is not int or delay < 0:
+            raise ValueError(f"{label}.off_delay must be a nonnegative whole number")
         zones = entry.get("zones")
         if not isinstance(zones, list) or not zones or any(
             not isinstance(zone, str) or zone not in zone_ids for zone in zones
@@ -80,17 +81,6 @@ def configuration(options, players):
         channels.add((device, channel))
         result.append(Trigger(entry["name"], device, protocol, channel, tuple(zones), delay))
     return result
-
-
-def command(protocol, channel, enabled):
-    if protocol not in PROTOCOLS or type(channel) is not int or not 1 <= channel <= PROTOCOLS[protocol]:
-        raise ValueError("Invalid relay protocol or channel")
-    if protocol == "DSD TECH SH-UR01A":
-        return f"AT+CH1={int(enabled)}\r\n".encode("ascii")
-    if protocol == "KMtronic":
-        return bytes((0xFF, channel, int(enabled)))
-    frame = (0xA0, channel, int(enabled))
-    return bytes((*frame, sum(frame) & 0xFF))
 
 
 def stream_status(zone, run_dir=RUN):
@@ -148,6 +138,7 @@ class Demand:
 class Board:
     def __init__(self, device, protocol, serial_factory=None, stop=None):
         self.device, self.protocol = device, protocol
+        self.driver = PROTOCOLS[protocol]
         self.serial_factory = serial_factory
         self.stop = stop
         self.port = None
@@ -169,32 +160,32 @@ class Board:
         deadline = time.monotonic() + 0.6
         while time.monotonic() < deadline:
             line = self.port.read_until(b"\n", 128).strip()
-            if line == b"OK":
+            if line == self.driver.acknowledgement:
                 return
-            if line == b"ERROR":
+            if self.driver.error and line == self.driver.error:
                 break
         raise OSError("relay did not acknowledge the command")
 
     def write(self, data):
         if self.port.write(data) != len(data):
             raise OSError("incomplete relay command")
-        if self.protocol == "DSD TECH SH-UR01A":
+        if self.driver.acknowledgement:
             self.acknowledge()
 
     def connect(self, identity):
         if self.serial_factory is None:
             import serial
             self.serial_factory = serial.Serial
-        port = self.serial_factory(port=None, baudrate=9600, timeout=0.1,
+        port = self.serial_factory(port=None, baudrate=self.driver.baudrate, timeout=0.1,
                                    write_timeout=0.2, exclusive=True)
         self.port = port
         port.dtr, port.rts = False, False
         port.port = self.device
         port.open()
         self.identity = identity
-        if self.protocol == "DSD TECH SH-UR01A":
+        if self.driver.handshake:
             port.reset_input_buffer()
-            self.write(b"AT\r\n")
+            self.write(self.driver.handshake)
         LOG.info("Connected %s relay at %s", self.protocol, self.device)
 
     def apply(self, desired, now):
@@ -241,7 +232,8 @@ class Board:
 def run(triggers, stop):
     if not triggers:
         return
-    boards = {item.device: Board(item.device, item.protocol, stop=stop) for item in triggers}
+    devices = {item.device: item.protocol for item in triggers}
+    boards = {device: Board(device, protocol, stop=stop) for device, protocol in devices.items()}
     demands = [Demand() for _ in triggers]
     zone_ids = sorted({zone for item in triggers for zone in item.zones})
     last_unknown = set()
@@ -249,7 +241,7 @@ def run(triggers, stop):
     for trigger in triggers:
         LOG.info("%s: %s channel %s, rooms %s, standby delay %ss", trigger.name,
                  trigger.device, trigger.channel, ", ".join(trigger.zones), trigger.off_delay)
-    with ThreadPoolExecutor(max_workers=max(len(zone_ids), len(boards))) as workers:
+    with ThreadPoolExecutor() as workers:
         try:
             while not stop.is_set():
                 states = dict(zip(zone_ids, workers.map(stream_status, zone_ids)))
