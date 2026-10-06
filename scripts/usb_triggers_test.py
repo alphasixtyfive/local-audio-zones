@@ -284,6 +284,22 @@ class BoardTests(unittest.TestCase):
         board.shutdown([1])
         factory.assert_not_called()
 
+    def test_stop_interrupts_pending_activation_but_shutdown_still_sends_off(self):
+        stop = threading.Event()
+
+        def stop_after_first_write(data):
+            stop.set()
+            return len(data)
+
+        port = SerialPort(write_failure=stop_after_first_write)
+        board, _ = self.board(port, protocol="LCUS")
+        board.stop = stop
+        board.apply({1: True, 2: True}, 0)
+        self.assertEqual(port.writes, [b"\xa0\x01\x01\xa2"])
+        board.shutdown([1, 2])
+        self.assertEqual(port.writes[-2:], [b"\xa0\x01\x00\xa1", b"\xa0\x02\x00\xa2"])
+        self.assertTrue(port.closed)
+
     def test_shutdown_failure_still_closes(self):
         port = SerialPort()
         board, _ = self.board(port, protocol="KMtronic")
