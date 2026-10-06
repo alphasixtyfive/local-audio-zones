@@ -32,7 +32,7 @@ cat > "$WORK/options.json" <<'OPTIONS'
 {
   "zones": [
     {"id": "study", "name": "Study", "output": "null"},
-    {"id": "bedroom", "name": "Bedroom", "output": "null"}
+    {"id": "bedroom", "name": "Bedroom", "output": "stdout"}
   ],
   "usb_relays": [
     {"name": "Amplifier", "device": "/dev/serial/by-id/usb-fixture-not-connected",
@@ -78,7 +78,7 @@ study_pid=$(wait_pid study)
 bedroom_pid=$(wait_pid bedroom)
 trigger_pid=$(wait_pid _usb-triggers)
 wait_health
-printf '  ok   two real null-output players and the USB service start under native s6\n'
+printf '  ok   two real players and the USB service start under native s6\n'
 
 for ((attempt=0; attempt<100; attempt++)); do
     if docker logs "$CONTAINER" 2>&1 | grep -F 'USB relay /dev/serial/by-id/usb-fixture-not-connected unavailable' > /dev/null; then
