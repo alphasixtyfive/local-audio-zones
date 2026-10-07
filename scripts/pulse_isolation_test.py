@@ -139,7 +139,8 @@ class Stream(threading.Thread):
             raise AssertionError(f"audio fixture could not send {kind}: {self.error}")
 
     def set_gain(self, volume, muted):
-        self.send("server/command", {"player": {"volume": volume, "mute": muted}})
+        self.send("server/command", {"player": {"command": "volume", "volume": volume}})
+        self.send("server/command", {"player": {"command": "mute", "mute": muted}})
 
     def end_stream(self):
         self.send("stream/end", {})
@@ -595,6 +596,12 @@ def main():
                 raise AssertionError("a missing named output silently selected another sink")
             print("  ok   missing named output is rejected without fallback", flush=True)
         except BaseException:
+            for control_socket in (work / "control.sock", work / "guest.sock"):
+                if control_socket.exists():
+                    try:
+                        print(f"\n--- {control_socket.name} status ---\n{player_status(control_socket)}", flush=True)
+                    except (OSError, subprocess.SubprocessError):
+                        pass
             for arguments in (("list", "short", "modules"), ("--format=json", "list", "sinks")):
                 try:
                     print(f"\n--- private pactl {' '.join(arguments)} ---\n{pactl(*arguments)}", flush=True)
