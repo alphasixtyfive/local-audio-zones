@@ -811,6 +811,102 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(self.routes.owned_modules(), self.pulse.modules)
         self.assertIn("sink_name=local_audio_zones_rear ", self.pulse.modules[0]["argument"])
         self.assertEqual(len(self.pulse.mutations()), 1)
+        self.assertEqual(self.pulse.calls.count(("--format=json", "list", "sinks")), 1)
+
+    def test_name_collision_during_load_never_marks_a_foreign_output_ready(self):
+        self.pulse.remap("foreign_front")
+        def collide_during_load(*arguments):
+            result = self.pulse(*arguments)
+            if arguments[0] == "load-module":
+                self.pulse.sinks[-1]["name"] += ".2"
+                self.pulse.modules.append({"index": 500, "name": "module-null-sink",
+                                           "argument": "sink_name=local_audio_zones_study"})
+                self.pulse.sinks.append({"name": "local_audio_zones_study", "owner_module": 500,
+                                         "channel_map": "front-left,front-right"})
+            return result
+        self.routes.pactl = collide_during_load
+        errors = self.routes.reconcile([room()])
+        self.assertIn("did not create", errors["study"])
+        self.assertEqual(self.routes.owned_modules(), [])
+        self.assertEqual([module["index"] for module in self.pulse.modules], [50, 500])
+        self.assertEqual([call for call in self.pulse.calls if call[0] == "unload-module"],
+                         [("unload-module", "100")])
+        self.assertFalse(any(sink["name"].endswith(".2") for sink in self.pulse.sinks))
+        status = Path(self.temporary.name) / "status.json"
+        self.routes.publish_status([room()], errors, status)
+        self.assertEqual(json.loads(status.read_text())["ready"], [])
+        self.assertEqual(json.loads(status.read_text())["waiting"], [])
+
+    def test_restart_cleans_an_owned_renamed_stray_and_preserves_the_foreign_target(self):
+        self.routes.reconcile([room()])
+        self.pulse.sinks[-1]["name"] += ".2"
+        self.pulse.modules.append({"index": 500, "name": "module-null-sink",
+                                   "argument": "sink_name=local_audio_zones_study"})
+        foreign = {"name": "local_audio_zones_study", "owner_module": 500,
+                   "channel_map": "front-left,front-right"}
+        self.pulse.sinks.append(foreign)
+        replacement = audio_routes.AudioRoutes(pactl=self.pulse, device_resolver=lambda _: (4, None),
+                                               registry=self.registry)
+        errors = replacement.reconcile([room()])
+        self.assertIn("already in use", errors["study"])
+        self.assertEqual(replacement.owned_modules(), [])
+        self.assertEqual([module["index"] for module in self.pulse.modules], [500])
+        self.assertIn(foreign, self.pulse.sinks)
+        self.assertEqual([call for call in self.pulse.calls if call[0] == "unload-module"],
+                         [("unload-module", "100")])
+        self.pulse("unload-module", "500")
+        self.assertEqual(replacement.reconcile([room()]), {})
+        self.assertEqual(len(replacement.owned_modules()), 1)
+        self.assertEqual(self.pulse.sinks[-1]["name"], "local_audio_zones_study")
+
+    def test_post_load_verification_failure_retains_ownership_if_cleanup_cannot_list(self):
+        def lose_pulse_after_load(*arguments):
+            if arguments == ("--format=json", "list", "sinks") and self.pulse.modules:
+                self.pulse.fail_module_listing = True
+                raise audio_routes.RoutingError("Fixture PulseAudio disappeared after creating the route")
+            return self.pulse(*arguments)
+        self.routes.pactl = lose_pulse_after_load
+        errors = self.routes.reconcile([room()])
+        self.assertIn("disappeared", errors["study"])
+        self.assertEqual(self.routes.owned_modules(), self.pulse.modules)
+        self.assertFalse(any(call[0] == "unload-module" for call in self.pulse.calls))
+        self.routes.pactl = self.pulse
+        self.pulse.fail_module_listing = False
+        self.assertEqual(self.routes.reconcile([room()]), {})
+        self.assertEqual(len(self.pulse.mutations()), 1)
+
+    def test_shutdown_during_module_lookup_preserves_ownership_without_unloading(self):
+        self.routes.reconcile([room()])
+        original = self.registry.read_text()
+        self.pulse.calls.clear()
+        stopped = False
+        def stop_during_listing(*arguments):
+            nonlocal stopped
+            result = self.pulse(*arguments)
+            if arguments == ("list", "short", "modules"):
+                stopped = True
+            return result
+        self.routes.pactl = stop_during_listing
+        self.routes.stopping = lambda: stopped
+        with self.assertRaisesRegex(audio_routes.RoutingError, "Could not unload"):
+            self.routes.cleanup()
+        self.assertEqual(self.registry.read_text(), original)
+        self.assertEqual(self.pulse.calls, [("list", "short", "modules")])
+        self.assertEqual(len(self.pulse.modules), 1)
+
+    def test_shutdown_during_inventory_starts_no_second_pulse_call(self):
+        stopped = False
+        def stop_during_inventory(*arguments):
+            nonlocal stopped
+            result = self.pulse(*arguments)
+            stopped = True
+            return result
+        self.routes.pactl = stop_during_inventory
+        self.routes.stopping = lambda: stopped
+        with self.assertRaisesRegex(audio_routes.RoutingError, "stopping"):
+            self.routes.reconcile([room()])
+        self.assertEqual(self.pulse.calls, [("--format=json", "list", "cards")])
+        self.assertFalse(self.registry.exists())
 
 
 if __name__ == "__main__":

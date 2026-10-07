@@ -72,6 +72,8 @@ class AudioRoutes:
         self.stopping = lambda: False
 
     def listing(self, kind):
+        if self.stopping():
+            raise RoutingError("Audio route recovery is stopping")
         if kind == "modules":
             modules = []
             indices = set()
@@ -139,6 +141,8 @@ class AudioRoutes:
                 return remaining + owned[position:]
             found = current.get(module["index"])
             if found and all(found.get(key) == value for key, value in module.items()):
+                if self.stopping():
+                    return remaining + owned[position:]
                 try:
                     self.pactl("unload-module", str(module["index"]))
                 except RoutingError:
@@ -213,9 +217,8 @@ class AudioRoutes:
         previous = next((item for item in owned
                          if module_arguments(item["argument"]).get("sink_name") == target), None)
         sink = next((item for item in sinks if item["name"] == target), None)
-        if sink is not None:
-            if previous is None or sink.get("owner_module") != previous["index"]:
-                raise RoutingError(player["name"] + ": the app output name is already in use by another module")
+        foreign = sink is not None and (previous is None or sink.get("owner_module") != previous["index"])
+        if sink is not None and not foreign:
             if previous["argument"] == argument and self.channels(sink) == ["front-left", "front-right"]:
                 return None
         if previous is not None:
@@ -223,6 +226,8 @@ class AudioRoutes:
                 raise RoutingError(player["name"] + ": could not replace its previous audio route")
             owned.remove(previous)
             self.record(owned)
+        if foreign:
+            raise RoutingError(player["name"] + ": the app output name is already in use by another module")
         if self.stopping():
             raise RoutingError("Audio route recovery is stopping")
         loaded = self.pactl("load-module", "module-remap-sink", argument)
@@ -231,13 +236,19 @@ class AudioRoutes:
         module = {"index": int(loaded), "name": "module-remap-sink", "argument": argument}
         try:
             self.record(owned + [module])
+            if not self.stopping():
+                sinks[:] = self.listing("sinks")
+                sink = next((item for item in sinks if item["name"] == target), None)
+                if sink is None or sink.get("owner_module") != module["index"]:
+                    raise RoutingError(player["name"] + ": PulseAudio did not create the requested app output name")
+                if self.channels(sink) != ["front-left", "front-right"]:
+                    raise RoutingError(player["name"] + ": PulseAudio did not create the requested stereo output")
         except Exception:
             remaining = self.remove_owned([module])
             self.record(owned + remaining)
             raise
         owned.append(module)
         modules.append(module)
-        sinks.append({"name": target, "owner_module": int(loaded), "channel_map": "front-left,front-right"})
         print(player["name"] + ": using pulse:" + target + " on " + master["name"]
               + " (" + ", ".join(channels) + ")", file=sys.stderr)
         return module
@@ -408,6 +419,8 @@ def main():
                     except (RoutingError, OSError, ValueError) as error:
                         routes.waiting = set()
                         errors = {"audio": str(error)}
+                    if stop.is_set():
+                        break
                     routes.publish_status(players, errors)
                     if errors != previous:
                         for message in errors.values():

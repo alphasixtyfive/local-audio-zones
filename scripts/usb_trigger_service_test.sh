@@ -102,7 +102,8 @@ for signal in TERM KILL; do
     printf '  ok   USB service recovers after %s without restarting players\n' "$signal"
 done
 
-docker stop --time 5 "$CONTAINER" > /dev/null
+# Match Home Assistant Supervisor's app shutdown deadline.
+docker stop --time 10 "$CONTAINER" > /dev/null
 [ "$(docker inspect --format '{{.State.ExitCode}}' "$CONTAINER")" -eq 0 ]
 [ "$(docker inspect --format '{{.State.Pid}}' "$CONTAINER")" -eq 0 ]
 printf '  ok   native container shutdown completes within the stop deadline\n'

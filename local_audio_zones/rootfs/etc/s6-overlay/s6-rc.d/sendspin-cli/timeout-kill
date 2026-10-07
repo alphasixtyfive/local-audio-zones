@@ -1,3 +1,2 @@
-6000
-# Allow the route worker to finish an in-flight pactl call and ownership write.
-# The nested scanner stops all rooms and workers concurrently.
+4500
+# Rooms and workers stop concurrently; the route worker has 4000ms to save ownership.

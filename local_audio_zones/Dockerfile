@@ -115,8 +115,8 @@ RUN apt-get update \
 # Stop the container if native configuration or startup fails.
 ENV S6_BEHAVIOUR_IF_STAGE2_FAILS=2
 
-# Keep service shutdown and bounded route cleanup within the Supervisor's grace.
-ENV S6_KILL_GRACETIME=6000
+# Services have their own shutdown bounds; this is the final wait for stray processes.
+ENV S6_KILL_GRACETIME=500
 
 COPY --from=build /stage/usr/local/bin/sendspin-cli /usr/bin/sendspin-cli
 COPY --from=build /build-info.txt /usr/share/sendspin-cli/BUILD-INFO.txt

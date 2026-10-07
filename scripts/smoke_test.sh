@@ -67,7 +67,8 @@ wait_log() {
     fail "missing log: $text"
 }
 stop_cleanly() {
-    docker stop --time 5 "$PLAYER" > /dev/null
+    # Match Home Assistant Supervisor's app shutdown deadline.
+    docker stop --time 10 "$PLAYER" > /dev/null
     [ "$(docker inspect --format '{{.State.ExitCode}}' "$PLAYER")" -ne 137 ] || fail 'shutdown exceeded its deadline'
 }
 config_line() { docker exec "$PLAYER" cat /run/sendspin-cli/zones/study/config | grep -Fx -- "$1" > /dev/null || fail "missing setting: $1"; }
@@ -89,6 +90,21 @@ docker exec "$PLAYER" jq -e 'length == 0' /run/sendspin-cli/players.json > /dev/
 docker exec "$PLAYER" /bin/bash -euc '[ ! -e /data/zones ]; [ "$(find /run/sendspin-cli/services -mindepth 1 -maxdepth 1 -type d -name "[!.]*" | wc -l)" -eq 1 ]; [ -d /run/sendspin-cli/services/_audio-routes ]' || fail 'empty app has unexpected player state or services'
 stop_cleanly
 pass 'unconfigured app stays healthy without creating a player'
+
+# Frozen processes cannot handle TERM, so their supervision timeouts must fit too.
+start '{"zones":[]}'
+wait_healthy
+docker exec "$PLAYER" /bin/bash -euc '
+    for service in /run/sendspin-cli/services/_audio-routes /run/service/avahi /run/service/dbus; do
+        pid=$(s6-svstat -o pid "$service")
+        [ "$pid" -gt 1 ]
+        kill -STOP "$pid"
+    done
+'
+stop_cleanly
+[ "$(docker inspect --format '{{.State.ExitCode}}' "$PLAYER")" -eq 0 ] || fail 'bounded service shutdown failed'
+[ "$(docker inspect --format '{{.State.Pid}}' "$PLAYER")" -eq 0 ] || fail 'bounded service shutdown retained the container process'
+pass 'frozen route worker and daemons stop within the Supervisor deadline'
 
 start '{"log_level":"warning","buffer_ms":250,"zones":[{"id":"study","name":"Study","output":"null","log_level":"debug","buffer_ms":100}]}'
 wait_healthy

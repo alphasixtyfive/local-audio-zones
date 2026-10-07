@@ -18,7 +18,7 @@ fi
 players=$(jq -c '.[]' "${SENDSPIN_PLAYERS_FILE}")
 mkdir -p "${SENDSPIN_RUN_DIR}/services"
 if [ -z "${players}" ]; then
-    sendspin::log 'No zones configured. Add rooms in the app Configuration tab, save and restart.'
+    sendspin::log 'No zones configured. Add zones in the app Configuration tab, save and restart.'
 fi
 while IFS= read -r player; do
     [ -n "${player}" ] || continue
