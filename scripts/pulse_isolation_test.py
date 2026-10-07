@@ -236,18 +236,35 @@ def main():
                  "--latency-msec=20", "--device=" + name + ".monitor"],
                 env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             )
+            # A recreated or idle null sink can take up to 2s to deliver its first block.
+            # Require 250ms of real stereo frames; an empty monitor never counts as silence.
+            minimum_frames = 12000
+            minimum_bytes = minimum_frames * 4
+            captured = bytearray()
+            deadline = time.monotonic() + 5
             try:
-                captured, error = recorder.communicate(timeout=1)
-            except subprocess.TimeoutExpired:
-                recorder.terminate()
-                captured, error = recorder.communicate(timeout=3)
+                while len(captured) < minimum_bytes:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    if not select.select([recorder.stdout], [], [], remaining)[0]:
+                        break
+                    block = os.read(recorder.stdout.fileno(), minimum_bytes - len(captured))
+                    if not block:
+                        break
+                    captured.extend(block)
             finally:
                 if recorder.poll() is None:
+                    recorder.terminate()
+                try:
+                    _, error = recorder.communicate(timeout=3)
+                except subprocess.TimeoutExpired:
                     recorder.kill()
-                    recorder.communicate(timeout=3)
-            samples = [sample[0] for sample in struct.iter_unpack("<h", captured[:len(captured) // 2 * 2])]
-            if not samples:
-                raise AssertionError(f"{name} monitor captured no PCM: {error.decode(errors='replace')}")
+                    _, error = recorder.communicate(timeout=3)
+            if len(captured) < minimum_bytes:
+                raise AssertionError(f"{name} monitor captured only {len(captured) // 4}/{minimum_frames} stereo PCM frames "
+                                     f"within 5s: {error.decode(errors='replace')}")
+            samples = [sample[0] for sample in struct.iter_unpack("<h", captured)]
             return sum(sample * sample for sample in samples) / len(samples)
 
         def wait_for(description, condition, timeout=15):
