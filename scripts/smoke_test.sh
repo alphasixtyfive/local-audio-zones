@@ -86,7 +86,7 @@ start '{"zones":[]}'
 wait_healthy
 docker exec "$PLAYER" jq -e 'length == 0' /run/sendspin-cli/players.json > /dev/null
 # Only route maintenance runs before the user configures their first room.
-docker exec "$PLAYER" /bin/bash -euc '[ ! -e /data/zones ]; [ "$(find /run/sendspin-cli/services -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ]; [ -d /run/sendspin-cli/services/_audio-routes ]'
+docker exec "$PLAYER" /bin/bash -euc '[ ! -e /data/zones ]; [ "$(find /run/sendspin-cli/services -mindepth 1 -maxdepth 1 -type d -name "[!.]*" | wc -l)" -eq 1 ]; [ -d /run/sendspin-cli/services/_audio-routes ]' || fail 'empty app has unexpected player state or services'
 stop_cleanly
 pass 'unconfigured app stays healthy without creating a player'
 
