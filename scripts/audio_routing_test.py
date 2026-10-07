@@ -117,7 +117,8 @@ class RoutingTests(unittest.TestCase):
                                              registry=self.registry)
 
     def test_explicit_outputs_do_not_contact_pulse_or_change_players(self):
-        players = [{"id": "first", "output": "null"}, {"id": "second", "output": "pulse:existing"}]
+        players = [{"id": "first", "name": "First", "output": "null"},
+                   {"id": "second", "name": "Second", "output": "pulse:existing"}]
         self.assertEqual(self.routes.resolve(players), players)
         self.assertEqual(self.pulse.calls, [])
         self.assertFalse(self.registry.exists())
@@ -163,20 +164,20 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(self.registry.read_text(), original)
         self.assertFalse(any(call[0] == "unload-module" for call in self.pulse.calls))
 
-    def test_reuses_existing_stereo_remap_without_changing_gain(self):
+    def test_creates_a_stable_owned_output_without_changing_host_remaps(self):
         self.pulse.remap()
         original = copy.deepcopy(self.pulse.sinks)
         player = room()
         result = self.routes.resolve([player])[0]
-        self.assertEqual(result["output"], "pulse:existing_front")
+        self.assertEqual(result["output"], "pulse:local_audio_zones_study")
         self.assertEqual(result["client_id"], "study")
         self.assertEqual(result["buffer_ms"], "250")
         self.assertNotIn("device", result)
         self.assertNotIn("channel_pair", result)
         self.assertEqual(player, room())
-        self.assertEqual(self.pulse.sinks, original)
-        self.assertEqual(self.pulse.mutations(), [])
-        self.assertFalse(self.registry.exists())
+        self.assertEqual(self.pulse.sinks[:len(original)], original)
+        self.assertEqual(len(self.pulse.mutations()), 1)
+        self.assertEqual(len(self.routes.owned_modules()), 1)
 
     def test_all_stereo_pairs_map_to_the_selected_card(self):
         pairs = {"front": "front-left,front-right", "rear": "rear-left,rear-right",
@@ -205,11 +206,12 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(player["channels"], ["aux5", "aux4"])
         self.assertIn("master_channel_map=aux5,aux4 remix=no", self.pulse.modules[0]["argument"])
 
-    def test_custom_channels_reuse_an_existing_exact_remap(self):
+    def test_custom_channels_get_their_own_stable_route(self):
         self.pulse.remap(channels="front-right,rear-left")
         result = self.routes.resolve([custom_room("custom", ["front-right", "rear-left"])])[0]
-        self.assertEqual(result["output"], "pulse:existing_front")
-        self.assertEqual(self.pulse.mutations(), [])
+        self.assertEqual(result["output"], "pulse:local_audio_zones_custom")
+        self.assertIn("master_channel_map=front-right,rear-left", self.pulse.modules[-1]["argument"])
+        self.assertEqual(self.pulse.modules[0]["index"], 50)
 
     def test_partial_physical_channel_overlap_is_rejected_before_creation(self):
         players = [room(), custom_room("custom", ["rear-right", "front-left"])]
@@ -426,7 +428,7 @@ class RoutingTests(unittest.TestCase):
         self.pulse.remap()
         result = self.routes.resolve([room("alias", device="/dev/snd/by-id/usb-card-a"),
                                       room("playback", pair="rear", device="/dev/snd/pcmC4D0p")])
-        self.assertEqual(result[0]["output"], "pulse:existing_front")
+        self.assertEqual(result[0]["output"], "pulse:local_audio_zones_alias")
         self.assertIn("master=usb_card_a ", self.pulse.modules[-1]["argument"])
 
     def test_duplicate_card_and_pair_aliases_are_rejected_before_creation(self):
@@ -515,12 +517,13 @@ class RoutingTests(unittest.TestCase):
         self.routes.resolve([room(pair="rear")])
         self.assertIn("master=usb_card_a ", self.pulse.modules[0]["argument"])
 
-    def test_ambiguous_remaps_are_rejected(self):
+    def test_multiple_host_remaps_do_not_change_the_owned_route_identity(self):
         self.pulse.remap()
         self.pulse.remap("another_front", index=51)
-        with self.assertRaisesRegex(audio_routes.RoutingError, "More than one"):
-            self.routes.resolve([room()])
-        self.assertEqual(self.pulse.mutations(), [])
+        result = self.routes.resolve([room()])
+        self.assertEqual(result[0]["output"], "pulse:local_audio_zones_study")
+        self.assertEqual([module["index"] for module in self.pulse.modules[:2]], [50, 51])
+        self.assertEqual(len(self.pulse.mutations()), 1)
 
     def test_remixing_route_is_not_reused(self):
         self.pulse.remap(remix="yes")
@@ -656,6 +659,158 @@ class RoutingTests(unittest.TestCase):
         self.pulse.fail_module_listing = False
         self.routes.cleanup()
         self.assertEqual(self.pulse.modules, [])
+
+    def lose_card_a(self):
+        self.pulse.cards = [card for card in self.pulse.cards if card["index"] != 9]
+        owned_ids = {module["index"] for module in self.pulse.modules
+                     if "master=usb_card_a " in module["argument"]}
+        self.pulse.modules = [module for module in self.pulse.modules if module["index"] not in owned_ids]
+        self.pulse.sinks = [sink for sink in self.pulse.sinks
+                            if sink["name"] != "usb_card_a" and sink.get("owner_module") not in owned_ids]
+
+    def test_player_outputs_are_fixed_without_contacting_missing_hardware(self):
+        player = custom_room("study", ["rear-right", "rear-left"])
+        result = self.routes.player_outputs([player])
+        self.assertEqual(result[0]["output"], "pulse:local_audio_zones_study")
+        self.assertNotIn("device", result[0])
+        self.assertNotIn("channels", result[0])
+        self.assertEqual(player["channels"], ["rear-right", "rear-left"])
+        self.assertEqual(self.pulse.calls, [])
+
+    def test_fixed_output_collision_fails_before_pulse_mutation(self):
+        explicit = {"id": "expert", "name": "Expert", "output": "pulse:local_audio_zones_study"}
+        with self.assertRaisesRegex(audio_routes.RoutingError, "same audio output"):
+            self.routes.reconcile([room(), explicit])
+        self.assertEqual(self.pulse.calls, [])
+
+    def test_missing_card_waits_while_an_independent_room_recovers(self):
+        self.lose_card_a()
+        players = [room(), room("guest", device="/dev/snd/controlC7")]
+        errors = self.routes.reconcile(players)
+        self.assertEqual(set(errors), {"study"})
+        self.assertEqual(self.routes.waiting, {"study"})
+        status = Path(self.temporary.name) / "status.json"
+        self.routes.publish_status(players, errors, status)
+        self.assertEqual(json.loads(status.read_text()),
+                         {"ready": ["guest"], "waiting": ["study"], "errors": {}})
+        self.assertEqual(len(self.pulse.modules), 1)
+        self.assertIn("sink_name=local_audio_zones_guest ", self.pulse.modules[0]["argument"])
+
+    def test_invalid_routing_is_not_hidden_as_missing_hardware(self):
+        players = [room(pair="rear", device="/dev/snd/controlC7")]
+        errors = self.routes.reconcile(players)
+        self.assertEqual(self.routes.waiting, set())
+        status = Path(self.temporary.name) / "status.json"
+        self.routes.publish_status(players, errors, status)
+        self.assertEqual(json.loads(status.read_text())["errors"], errors)
+        self.assertEqual(json.loads(status.read_text())["ready"], [])
+
+    def test_global_pulse_failure_never_publishes_ready_or_waiting_rooms(self):
+        status = Path(self.temporary.name) / "status.json"
+        self.routes.publish_status([room()], {"audio": "PulseAudio unavailable"}, status)
+        self.assertEqual(json.loads(status.read_text()),
+                         {"ready": [], "waiting": [], "errors": {"audio": "PulseAudio unavailable"}})
+
+    def test_repeated_outages_recover_only_the_affected_stable_output(self):
+        master = copy.deepcopy(self.pulse.sinks[0])
+        players = [room(device="/dev/snd/by-path/pci-0000:00:14.0-usb-0:1:1.0"),
+                   room("guest", device="/dev/snd/controlC7")]
+        index = 4
+        self.routes.device_resolver = lambda device: (7 if device.endswith("C7") else index, None)
+        self.assertEqual(self.routes.reconcile(players), {})
+        guest = next(sink for sink in self.pulse.sinks if sink["name"] == "local_audio_zones_guest")
+        guest.update(volume={"fixture": "61%"}, mute=True)
+        preserved = copy.deepcopy(guest)
+        for index in (14, 24):
+            self.lose_card_a()
+            self.assertEqual(set(self.routes.reconcile(players)), {"study"})
+            self.pulse.cards.append({"index": 9, "properties": {"alsa.card": str(index)}})
+            master["properties"]["alsa.card"] = str(index)
+            self.pulse.sinks.append(copy.deepcopy(master))
+            self.assertEqual(self.routes.reconcile(players), {})
+            owned = self.routes.owned_modules()
+            self.assertEqual(len(owned), 2)
+            self.assertEqual(next(sink for sink in self.pulse.sinks
+                                  if sink["name"] == "local_audio_zones_guest"), preserved)
+            self.assertEqual(sum("sink_name=local_audio_zones_study " in module["argument"]
+                                 for module in self.pulse.modules), 1)
+        self.assertFalse(any(call[0].startswith("set-") for call in self.pulse.calls))
+
+    def test_healthy_worker_restart_keeps_owned_modules_volume_and_mute(self):
+        players = [room()]
+        self.routes.reconcile(players)
+        self.pulse.sinks[-1].update(volume={"fixture": "80%"}, mute=True)
+        original = copy.deepcopy(self.pulse.sinks[-1])
+        mutations = self.pulse.mutations()[:]
+        replacement = audio_routes.AudioRoutes(pactl=self.pulse, device_resolver=lambda _: (4, None),
+                                               registry=self.registry)
+        for _ in range(3):
+            self.assertEqual(replacement.reconcile(players), {})
+        self.assertEqual(self.pulse.sinks[-1], original)
+        self.assertEqual(self.pulse.mutations(), mutations)
+
+    def test_one_failed_route_does_not_roll_back_an_independent_recovery(self):
+        self.pulse.fail_load = "local_audio_zones_study"
+        players = [room(), room("guest", device="/dev/snd/controlC7")]
+        errors = self.routes.reconcile(players)
+        self.assertEqual(set(errors), {"study"})
+        self.assertEqual(self.routes.waiting, set())
+        self.assertEqual(len(self.routes.owned_modules()), 1)
+        self.assertIn("sink_name=local_audio_zones_guest ", self.pulse.modules[0]["argument"])
+
+    def test_removed_rooms_clean_only_their_exact_owned_modules(self):
+        self.pulse.remap()
+        players = [room("rear", "rear"), room("side", "side")]
+        self.routes.reconcile(players)
+        side = copy.deepcopy(self.pulse.modules[-1])
+        self.assertEqual(self.routes.reconcile([players[1]]), {})
+        self.assertEqual(self.pulse.modules, [self.pulse.modules[0], side])
+        self.assertEqual(self.routes.owned_modules(), [side])
+        self.assertEqual(self.routes.reconcile([]), {})
+        self.assertEqual([module["index"] for module in self.pulse.modules], [50])
+
+    def test_pulse_listing_outage_retains_ownership_until_recovery(self):
+        self.routes.reconcile([room()])
+        original = self.registry.read_text()
+        self.pulse.fail_module_listing = True
+        with self.assertRaises(audio_routes.RoutingError):
+            self.routes.reconcile([room()])
+        self.assertEqual(self.registry.read_text(), original)
+        self.pulse.fail_module_listing = False
+        self.assertEqual(self.routes.reconcile([room()]), {})
+        self.assertEqual(len(self.pulse.mutations()), 1)
+
+    def test_recycled_foreign_module_with_our_sink_name_is_not_unloaded(self):
+        self.routes.reconcile([room()])
+        self.pulse.modules[-1]["argument"] += " foreign=yes"
+        errors = self.routes.reconcile([room()])
+        self.assertIn("already in use", errors["study"])
+        self.assertEqual(self.routes.waiting, set())
+        self.assertFalse(any(call[0] == "unload-module" for call in self.pulse.calls))
+
+    def test_foreign_collision_does_not_prevent_an_unrelated_room(self):
+        self.pulse.sinks.append({"name": "local_audio_zones_study"})
+        errors = self.routes.reconcile([room(), room("guest", device="/dev/snd/controlC7")])
+        self.assertEqual(set(errors), {"study"})
+        self.assertEqual(self.routes.waiting, set())
+        self.assertIn("sink_name=local_audio_zones_guest ", self.pulse.modules[-1]["argument"])
+        self.assertFalse(any(call[0] == "unload-module" for call in self.pulse.calls))
+
+    def test_shutdown_during_creation_records_that_route_and_starts_no_more(self):
+        stopped = False
+        def stop_during_load(*arguments):
+            nonlocal stopped
+            result = self.pulse(*arguments)
+            if arguments[0] == "load-module":
+                stopped = True
+            return result
+        self.routes.pactl = stop_during_load
+        self.routes.stopping = lambda: stopped
+        self.routes.reconcile([room("rear", "rear"), room("side", "side")])
+        self.assertEqual(len(self.pulse.modules), 1)
+        self.assertEqual(self.routes.owned_modules(), self.pulse.modules)
+        self.assertIn("sink_name=local_audio_zones_rear ", self.pulse.modules[0]["argument"])
+        self.assertEqual(len(self.pulse.mutations()), 1)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 # Modified for Local Audio Zones; upstream attribution is in NOTICE.
-# Build from pinned upstream source, then apply the documented routing fix.
+# Build from pinned upstream source, then apply the documented audio fixes.
 # Bump both ARGs together; the SHA check rejects a repointed tag.
 ARG SENDSPIN_CLI_REF=v0.2.0
 ARG SENDSPIN_CLI_SHA=e980128a9c37229cbc28c764e9f2fd65d1c5edb6
@@ -43,8 +43,15 @@ RUN git clone --depth 1 --branch "${SENDSPIN_CLI_REF}" \
     fi
 
 COPY patches/0001-pulse-pin-named-output.patch /tmp/pulse-pin-named-output.patch
+COPY patches/0002-recover-long-and-repeated-outages.patch /tmp/sink-recovery.patch
+COPY patches/sink_recovery_test.cpp /tmp/sink_recovery_test.cpp
 RUN git apply --check /tmp/pulse-pin-named-output.patch \
-    && git apply /tmp/pulse-pin-named-output.patch
+    && git apply /tmp/pulse-pin-named-output.patch \
+    && git apply --check /tmp/sink-recovery.patch \
+    && git apply /tmp/sink-recovery.patch \
+    && c++ -std=c++17 -Wall -Wextra -Werror -Isrc \
+        src/sink_recovery.cpp /tmp/sink_recovery_test.cpp -o /tmp/sink-recovery-test \
+    && /tmp/sink-recovery-test
 
 # Upstream silently drops backends with missing dependencies; verify the result.
 RUN cmake -B build \
@@ -69,7 +76,7 @@ RUN core_tag="$(sed -n 's/^set(SENDSPIN_GIT_TAG "\([^"]*\)".*/\1/p' CMakeLists.t
     && printf 'SENDSPIN_CLI_REF=%s\nSENDSPIN_CLI_SHA=%s\nSENDSPIN_GIT_TAG=%s\n' \
         "${SENDSPIN_CLI_REF}" "${SENDSPIN_CLI_SHA}" "${core_tag}" \
         > /build-info.txt \
-    && sha256sum /tmp/pulse-pin-named-output.patch >> /build-info.txt
+    && sha256sum /tmp/pulse-pin-named-output.patch /tmp/sink-recovery.patch >> /build-info.txt
 
 
 # Debian trixie with s6-overlay v3, matching the build stage.
@@ -79,7 +86,7 @@ FROM ghcr.io/home-assistant/aarch64-base-debian@sha256:acc61c0ab60cbca176ec0fe4d
 FROM base-${BUILD_ARCH}
 
 ARG BUILD_ARCH
-ARG BUILD_VERSION=0.1.0
+ARG BUILD_VERSION=0.1.1
 
 LABEL \
     org.opencontainers.image.source="https://github.com/alphasixtyfive/local-audio-zones" \
@@ -109,7 +116,7 @@ RUN apt-get update \
 ENV S6_BEHAVIOUR_IF_STAGE2_FAILS=2
 
 # Keep service shutdown and bounded route cleanup within the Supervisor's grace.
-ENV S6_KILL_GRACETIME=2000
+ENV S6_KILL_GRACETIME=6000
 
 COPY --from=build /stage/usr/local/bin/sendspin-cli /usr/bin/sendspin-cli
 COPY --from=build /build-info.txt /usr/share/sendspin-cli/BUILD-INFO.txt

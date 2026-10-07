@@ -4,10 +4,22 @@ set -euo pipefail
 source /usr/lib/sendspin-cli/common.sh
 source /usr/lib/sendspin-cli/players.sh
 
-# A player answers even when idle or disconnected from a Music Assistant server.
+if [ "$(s6-svstat -o up "${SENDSPIN_RUN_DIR}/services/_audio-routes")" != true ]; then
+    sendspin::log 'The audio route recovery service is not running.'
+    exit 1
+fi
+if ! jq -e '.errors | length == 0' "${SENDSPIN_RUN_DIR}/routes.json" > /dev/null; then
+    sendspin::log 'Audio route recovery has not validated the configured outputs.'
+    exit 1
+fi
+
+# Idle players answer; only a verified missing device may wait without a CLI.
 ids=$(jq -r '.[].id' "${SENDSPIN_PLAYERS_FILE}")
 while IFS= read -r id; do
     [ -n "${id}" ] || continue
+    if jq -e --arg id "${id}" '.waiting | index($id) != null' "${SENDSPIN_RUN_DIR}/routes.json" > /dev/null; then
+        continue
+    fi
     sendspin::player_paths "${id}"
     if ! timeout 2 sendspin-cli status --control-socket "${player_control_socket}" > /dev/null; then
         sendspin::log "Player ${id} is not responding on its control socket."

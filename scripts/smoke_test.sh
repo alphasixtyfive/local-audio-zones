@@ -85,8 +85,8 @@ pass 'Home Assistant image labels match the version and architecture'
 start '{"zones":[]}'
 wait_healthy
 docker exec "$PLAYER" jq -e 'length == 0' /run/sendspin-cli/players.json > /dev/null
-# s6 scans an empty directory while the user configures their first room.
-docker exec "$PLAYER" /bin/bash -euc '[ ! -e /data/zones ]; ! compgen -G "/run/sendspin-cli/services/*"'
+# Only route maintenance runs before the user configures their first room.
+docker exec "$PLAYER" /bin/bash -euc '[ ! -e /data/zones ]; [ "$(find /run/sendspin-cli/services -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 1 ]; [ -d /run/sendspin-cli/services/_audio-routes ]'
 stop_cleanly
 pass 'unconfigured app stays healthy without creating a player'
 
@@ -128,7 +128,7 @@ pass 'explicit player ports and inherited shared settings reach the native playe
 printf '\nInvalid startup configuration\n'
 for invalid in \
     '{"zones":[{"id":"study","name":"Study","output":"null","port":80}]}' \
-    '{"zones":[{"id":"study","name":"Study","device":"/dev/snd/controlC9999"}]}' \
+    '{"zones":[{"id":"study","name":"Study","device":"/dev/snd/pcmC9999D0c"}]}' \
     '{"zones":[{"id":"study","name":"Study","output":"null"}],"server":"ws://user:s3cr3t@192.0.2.1:8927"}'; do
     start "$invalid"
     exit_code=$(timeout 20 docker wait "$PLAYER")

@@ -35,6 +35,7 @@ jobs:
             local_audio_zones/rootfs/usr/bin/container-healthcheck \
             local_audio_zones/rootfs/usr/lib/sendspin-cli/decide-daemons \
             local_audio_zones/rootfs/usr/lib/sendspin-cli/player-run \
+            local_audio_zones/rootfs/usr/lib/sendspin-cli/audio-route-run \
             local_audio_zones/rootfs/usr/lib/sendspin-cli/usb-trigger-run \
             local_audio_zones/rootfs/etc/s6-overlay/s6-rc.d/*/run \
             local_audio_zones/rootfs/etc/s6-overlay/s6-rc.d/*/finish

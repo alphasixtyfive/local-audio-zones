@@ -12,15 +12,18 @@ WORK=$(mktemp -d)
 readonly WORK
 readonly CONTAINER="local-audio-zones-$$"
 readonly SCANNER_CONTAINER="${CONTAINER}-scanner"
+readonly WAITING_CONTAINER="${CONTAINER}-waiting"
 
 cleanup() {
     local status=$?
     if [ "$status" -ne 0 ]; then
         docker logs "$CONTAINER" >&2 || true
         docker logs "$SCANNER_CONTAINER" >&2 || true
+        docker logs "$WAITING_CONTAINER" >&2 || true
     fi
     docker rm -f "$CONTAINER" > /dev/null 2>&1 || true
     docker rm -f "$SCANNER_CONTAINER" > /dev/null 2>&1 || true
+    docker rm -f "$WAITING_CONTAINER" > /dev/null 2>&1 || true
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -157,3 +160,52 @@ grep -F 'sendspin-cli exited 137; stopping the container.' <<< "$logs" > /dev/nu
 [ "$(grep -c '^started Guest room ' <<< "$logs")" -eq 1 ]
 [ "$(docker inspect --format '{{.State.Pid}}' "$SCANNER_CONTAINER")" -eq 0 ]
 printf '  ok   unexpected scanner death halts the container without duplicate players\n'
+
+# A connected audio server with no cards is a normal hotplug waiting state.
+cat > "$WORK/pactl" <<'PACTL'
+#!/usr/bin/env bash
+case "$*" in
+    '--format=json list cards'|'--format=json list sinks') printf '[]\n' ;;
+    'list short modules') : ;;
+    *) exit 1 ;;
+esac
+PACTL
+chmod +x "$WORK/pactl"
+printf '%s\n' '{"zones":[{"id":"study","name":"Study","device":"/dev/snd/controlC9999"},{"id":"guest","name":"Guest room","output":"null"}]}' > "$WORK/waiting-options.json"
+docker run -d --name "$WAITING_CONTAINER" --network none --no-healthcheck \
+    --volume "$WORK/player:/usr/bin/sendspin-cli:ro" \
+    --volume "$WORK/pactl:/usr/bin/pactl:ro" \
+    --volume "$WORK/waiting-options.json:/data/options.json:ro" \
+    --entrypoint /bin/bash "$IMAGE" -euc '
+        mkdir -p /run/sendspin-cli
+        printf "no\n" > /run/sendspin-cli/bundled-daemons
+        exec bash /etc/s6-overlay/s6-rc.d/sendspin-cli/run
+    ' > /dev/null
+wait_for_player guest '' "$WAITING_CONTAINER" > /dev/null
+for ((attempt=0; attempt<100; attempt++)); do
+    if docker exec "$WAITING_CONTAINER" jq -e '.waiting == ["study"] and .errors == {}' \
+        /run/sendspin-cli/routes.json > /dev/null 2>&1; then break; fi
+    sleep 0.1
+done
+docker exec "$WAITING_CONTAINER" /usr/bin/container-healthcheck
+docker exec "$WAITING_CONTAINER" test ! -e /data/zones/study/state/pid
+logs=$(docker logs "$WAITING_CONTAINER" 2>&1)
+if grep -F 'started Study ' <<< "$logs" > /dev/null; then
+    printf 'Missing soundcard started a native player before its output existed.\n' >&2
+    exit 1
+fi
+docker exec "$WAITING_CONTAINER" rm /run/sendspin-cli/zones/guest/control.sock
+if docker exec "$WAITING_CONTAINER" /usr/bin/container-healthcheck > /dev/null 2>&1; then
+    printf 'Waiting room masked failure of its healthy neighbor.\n' >&2
+    exit 1
+fi
+docker exec "$WAITING_CONTAINER" touch /run/sendspin-cli/zones/guest/control.sock
+docker exec "$WAITING_CONTAINER" s6-svc -d /run/sendspin-cli/services/_audio-routes
+docker exec "$WAITING_CONTAINER" timeout 5 s6-svwait -d /run/sendspin-cli/services/_audio-routes
+if docker exec "$WAITING_CONTAINER" /usr/bin/container-healthcheck > /dev/null 2>&1; then
+    printf 'Waiting room masked a stopped route recovery worker.\n' >&2
+    exit 1
+fi
+docker stop --time 8 "$WAITING_CONTAINER" > /dev/null
+[ "$(docker inspect --format '{{.State.ExitCode}}' "$WAITING_CONTAINER")" -ne 137 ]
+printf '  ok   missing hardware waits without a player, preserves neighbor health and stops cleanly\n'

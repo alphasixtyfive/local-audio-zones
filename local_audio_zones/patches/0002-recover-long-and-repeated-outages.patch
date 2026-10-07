@@ -1,0 +1,258 @@
+diff --git a/src/sink_recovery.h b/src/sink_recovery.h
+--- a/src/sink_recovery.h
++++ b/src/sink_recovery.h
+@@ -12,7 +12,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-/// When a sink whose device died mid-stream should try to get it back, and when to give up.
++/// Retry timing for a sink whose device died mid-stream.
+ 
+ #pragma once
+ 
+@@ -28,11 +28,9 @@
+ /// Ceiling the doubling delay between retried rescans grows to.
+ inline constexpr int64_t SINK_RESCAN_MAX_DELAY_MS = 30000;
+ 
+-/// Rescan attempts allowed per configured stream.
+-inline constexpr int SINK_RESCAN_ATTEMPTS = 5;
+-
+ /// Decides when a sink reopens a dead device in place and when it rescans or reconnects.
+-/// Budget is per configured stream: one reopen, then up to SINK_RESCAN_ATTEMPTS rescans.
++/// One immediate reopen per configured stream, then retries with capped backoff.
++/// Successful recovery restores the initial rescan delay for the next outage.
+ /// Every method but pending() must be called under the lock that serialises the sink's stream.
+ class SinkRecovery {
+ public:
+@@ -62,10 +60,10 @@
+     /// Returns and clears the frames accumulated by discard_frames().
+     uint32_t take_discarded_frames();
+ 
+-    /// Drops the discarded-frame count, leaving the recovery budget alone.
++    /// Drops the discarded-frame count, leaving the recovery timing alone.
+     void forget_discarded_frames();
+ 
+-    /// Refills the budget; call only when configure() really opened a stream.
++    /// Resets recovery for a newly configured stream, including its discarded-frame count.
+     void reset();
+ 
+ private:
+@@ -73,15 +71,10 @@
+ 
+     static constexpr int64_t NOT_STAMPED = INT64_MIN;
+ 
+-    /// Delay before the attempt after `attempts_made`, doubling up to SINK_RESCAN_MAX_DELAY_MS.
+-    static int64_t delay_for_(int attempts_made);
+-
+     bool reopen_spent_{false};
+-    /// Latches when the second attempt is retired.
+-    bool rescan_spent_{false};
+     /// Set from handing out an attempt until rescan_done(); blocks re-arming and double counting.
+     bool rescan_in_flight_{false};
+-    int rescan_attempts_{0};
++    int64_t rescan_delay_ms_{SINK_RESCAN_DELAY_MS};
+     /// Frames accepted with no device to play them, not yet retired; see discard_frames().
+     uint32_t discarded_frames_{0};
+     /// Read by the main loop without the sink's lock; see pending().
+diff --git a/src/sink_recovery.cpp b/src/sink_recovery.cpp
+--- a/src/sink_recovery.cpp
++++ b/src/sink_recovery.cpp
+@@ -41,14 +41,13 @@
+         return false;
+     }
+     if (this->rescan_at_ms_ == NOT_STAMPED) {
+-        // Stamped on the first tick after escalation; the delay grows with attempts made.
+-        this->rescan_at_ms_ = now_ms + delay_for_(this->rescan_attempts_);
++        // Stamped on the first tick after escalation; failed attempts increase the delay.
++        this->rescan_at_ms_ = now_ms + this->rescan_delay_ms_;
+         return false;
+     }
+     if (now_ms < this->rescan_at_ms_) {
+         return false;
+     }
+-    ++this->rescan_attempts_;
+     this->rescan_in_flight_ = true;
+     // In flight: nothing more is owed until rescan_done() reports.
+     this->rescan_owed_.store(false, std::memory_order_relaxed);
+@@ -61,12 +60,16 @@
+         return;
+     }
+     this->rescan_in_flight_ = false;
+-    if (recovered || this->rescan_attempts_ >= SINK_RESCAN_ATTEMPTS) {
+-        this->rescan_spent_ = true;
++    if (recovered) {
++        this->rescan_delay_ms_ = SINK_RESCAN_DELAY_MS;
++        this->rescan_at_ms_ = NOT_STAMPED;
+         this->rescan_owed_.store(false, std::memory_order_relaxed);
+         return;
+     }
+-    // Owe another; the next tick stamps a longer deadline.
++    // Devices may return much later. Keep retrying, with bounded work and delay.
++    this->rescan_delay_ms_ = (this->rescan_delay_ms_ >= SINK_RESCAN_MAX_DELAY_MS / 2)
++                                ? SINK_RESCAN_MAX_DELAY_MS
++                                : this->rescan_delay_ms_ * 2;
+     this->rescan_at_ms_ = NOT_STAMPED;
+     this->rescan_owed_.store(true, std::memory_order_relaxed);
+ }
+@@ -92,9 +95,8 @@
+ 
+ void SinkRecovery::reset() {
+     this->reopen_spent_ = false;
+-    this->rescan_spent_ = false;
+     this->rescan_in_flight_ = false;
+-    this->rescan_attempts_ = 0;
++    this->rescan_delay_ms_ = SINK_RESCAN_DELAY_MS;
+     this->rescan_owed_.store(false, std::memory_order_relaxed);
+     this->rescan_at_ms_ = NOT_STAMPED;
+     this->discarded_frames_ = 0;
+@@ -102,7 +104,7 @@
+ 
+ void SinkRecovery::escalate_() {
+     // Not while in flight: rescan_at_ms_ is already past, so re-arming would skip the delay.
+-    if (!this->rescan_spent_ && !this->rescan_in_flight_) {
++    if (!this->rescan_in_flight_) {
+         this->rescan_owed_.store(true, std::memory_order_relaxed);
+     }
+ }
+@@ -131,13 +133,4 @@
+     this->frames_.store(0);
+ }
+ 
+-int64_t SinkRecovery::delay_for_(int attempts_made) {
+-    int64_t delay = SINK_RESCAN_DELAY_MS;
+-    // Doubled in a loop rather than shifted, so raising SINK_RESCAN_ATTEMPTS cannot overflow.
+-    for (int i = 0; i < attempts_made && delay < SINK_RESCAN_MAX_DELAY_MS; ++i) {
+-        delay *= 2;
+-    }
+-    return (delay < SINK_RESCAN_MAX_DELAY_MS) ? delay : SINK_RESCAN_MAX_DELAY_MS;
+-}
+-
+ }  // namespace sendspin_cli
+diff --git a/tests/sink_recovery_test.cpp b/tests/sink_recovery_test.cpp
+--- a/tests/sink_recovery_test.cpp
++++ b/tests/sink_recovery_test.cpp
+@@ -12,7 +12,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-/// SinkRecovery: what a sink whose device died mid-stream may try, and when it must stop.
++/// SinkRecovery: bounded retry timing through long and repeated device outages.
+ 
+ #include "sink_recovery.h"
+ 
+@@ -123,11 +123,11 @@
+               T0 + SINK_RESCAN_DELAY_MS);
+ }
+ 
+-TEST(SinkRecovery, ForgettingTheDiscardedGapDoesNotRefillASpentBudget) {
++TEST(SinkRecovery, ForgettingTheDiscardedGapDoesNotResetRetryBackoff) {
+     SinkRecovery recovery;
+     escalate(recovery);
+     int64_t now = T0;
+-    for (int attempt = 0; attempt < SINK_RESCAN_ATTEMPTS; ++attempt) {
++    for (int attempt = 0; attempt < 32; ++attempt) {
+         now = rescan_fires_at(recovery, now, now + 100 * SINK_RESCAN_DELAY_MS);
+         ASSERT_GT(now, 0) << "attempt " << attempt << " never fired";
+         recovery.rescan_done(false);
+@@ -136,9 +136,10 @@
+ 
+     recovery.forget_discarded_frames();
+ 
+-    EXPECT_FALSE(recovery.pending());
++    EXPECT_TRUE(recovery.pending());
+     EXPECT_FALSE(recovery.reopen_due());
+-    EXPECT_EQ(rescan_fires_at(recovery, now, now + 100 * SINK_RESCAN_DELAY_MS), -1);
++    EXPECT_EQ(rescan_fires_at(recovery, now, now + 100 * SINK_RESCAN_DELAY_MS),
++              now + SINK_RESCAN_MAX_DELAY_MS);
+ }
+ 
+ TEST(SinkRecovery, ResetClearsTheDiscardedGap) {
+@@ -266,13 +267,13 @@
+     EXPECT_EQ(second, first + (2 * SINK_RESCAN_DELAY_MS));
+ }
+ 
+-TEST(SinkRecovery, TheRetriesRunOutAndTheDelayStopsGrowing) {
++TEST(SinkRecovery, RetriesContinueAfterALongOutageAtTheCappedDelay) {
+     SinkRecovery recovery;
+     escalate(recovery);
+ 
+     int64_t now = T0;
+     int64_t previous_delay = 0;
+-    for (int attempt = 1; attempt <= SINK_RESCAN_ATTEMPTS; ++attempt) {
++    for (int attempt = 1; attempt <= 32; ++attempt) {
+         const int64_t fired_at = rescan_fires_at(recovery, now, now + 100 * SINK_RESCAN_DELAY_MS);
+         ASSERT_GT(fired_at, 0) << "attempt " << attempt << " never fired";
+ 
+@@ -280,7 +281,7 @@
+         EXPECT_GE(delay, previous_delay) << "attempt " << attempt << " came sooner than the last";
+         EXPECT_LE(delay, SINK_RESCAN_MAX_DELAY_MS)
+             << "attempt " << attempt << " waited past the ceiling";
+-        if (attempt == SINK_RESCAN_ATTEMPTS) {
++        if (attempt == 32) {
+             // Pinned, not just bounded, so a delay that never grew cannot pass.
+             EXPECT_EQ(delay, SINK_RESCAN_MAX_DELAY_MS);
+         }
+@@ -290,8 +291,9 @@
+         now = fired_at;
+     }
+ 
+-    EXPECT_FALSE(recovery.pending());
+-    EXPECT_EQ(rescan_fires_at(recovery, now, now + 100 * SINK_RESCAN_DELAY_MS), -1);
++    EXPECT_TRUE(recovery.pending());
++    EXPECT_EQ(rescan_fires_at(recovery, now, now + 100 * SINK_RESCAN_DELAY_MS),
++              now + SINK_RESCAN_MAX_DELAY_MS);
+ }
+ 
+ TEST(SinkRecovery, ReportingOnAnAttemptThatIsNotOutstandingDoesNothing) {
+@@ -314,16 +316,16 @@
+     EXPECT_FALSE(recovery.pending());
+ }
+ 
+-TEST(SinkRecovery, ResetPutsTheWholeRetryBudgetBack) {
++TEST(SinkRecovery, ResetRestoresTheInitialDelayAfterALongOutage) {
+     SinkRecovery recovery;
+     escalate(recovery);
+     int64_t now = T0;
+-    for (int attempt = 0; attempt < SINK_RESCAN_ATTEMPTS; ++attempt) {
++    for (int attempt = 0; attempt < 32; ++attempt) {
+         now = rescan_fires_at(recovery, now, now + 100 * SINK_RESCAN_DELAY_MS);
+         ASSERT_GT(now, 0) << "attempt " << attempt << " never fired";
+         recovery.rescan_done(false);
+     }
+-    ASSERT_FALSE(recovery.pending());
++    ASSERT_TRUE(recovery.pending());
+ 
+     // reset() also returns the delay to SINK_RESCAN_DELAY_MS.
+     recovery.reset();
+@@ -346,6 +348,31 @@
+               T0 + SINK_RESCAN_DELAY_MS);
+ }
+ 
++TEST(SinkRecovery, RecoveryAfterALongOutageAllowsAnotherOutageInTheSameStream) {
++    SinkRecovery recovery;
++    escalate(recovery);
++    int64_t now = T0;
++    for (int attempt = 0; attempt < 32; ++attempt) {
++        now = rescan_fires_at(recovery, now, now + SINK_RESCAN_MAX_DELAY_MS);
++        ASSERT_GT(now, 0);
++        recovery.rescan_done(false);
++    }
++    recovery.discard_frames(48'000U);
++    now = rescan_fires_at(recovery, now, now + SINK_RESCAN_MAX_DELAY_MS);
++    ASSERT_GT(now, 0);
++    recovery.rescan_done(true);
++    EXPECT_FALSE(recovery.pending());
++    EXPECT_EQ(recovery.take_discarded_frames(), 48'000U);
++
++    // A later failed write schedules recovery without needing a new configure().
++    EXPECT_FALSE(recovery.reopen_due());
++    EXPECT_TRUE(recovery.pending());
++    EXPECT_EQ(rescan_fires_at(recovery, now, now + SINK_RESCAN_DELAY_MS),
++              now + SINK_RESCAN_DELAY_MS);
++    recovery.rescan_done(true);
++    EXPECT_FALSE(recovery.pending());
++}
++
+ TEST(SinkRecovery, ResetPutsBothAttemptsBackInHand) {
+     SinkRecovery recovery;
+     escalate(recovery);

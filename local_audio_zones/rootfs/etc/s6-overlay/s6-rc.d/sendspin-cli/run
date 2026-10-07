@@ -50,4 +50,10 @@ if jq -e '(.usb_relays // []) | length > 0' /data/options.json > /dev/null; then
     printf '2000\n' > "${service_dir}/timeout-kill"
 fi
 
+service_dir="${SENDSPIN_RUN_DIR}/services/_audio-routes"
+mkdir -p "${service_dir}"
+ln -sf /usr/lib/sendspin-cli/audio-route-run "${service_dir}/run"
+# Complete an in-flight pactl call and ownership write before shutdown cleanup.
+printf '4000\n' > "${service_dir}/timeout-kill"
+
 exec s6-svscan "${SENDSPIN_RUN_DIR}/services"

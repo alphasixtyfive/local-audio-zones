@@ -15,8 +15,9 @@ e980128a9c37229cbc28c764e9f2fd65d1c5edb6, and sendspin-cpp v0.8.0, commit
 9331ace6428979982c934384702d289958ca125e.
 Copyright 2026 sendspin-cpp-cli Contributors.
 Copyright 2026 Kevin Ahrendt (sendspin-cpp).
-Both projects use the Apache License, Version 2.0. The local patch pins named
-PulseAudio outputs using PA_STREAM_DONT_MOVE.
+Both projects use the Apache License, Version 2.0. Local patches pin named
+PulseAudio outputs using PA_STREAM_DONT_MOVE and keep bounded audio-device
+recovery available through long and repeated disconnections.
 https://github.com/Sendspin/sendspin-cpp-cli
 https://github.com/Sendspin/sendspin-cpp
 

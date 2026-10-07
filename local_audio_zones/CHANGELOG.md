@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- Restore zone outputs when a soundcard reconnects, without restarting other players.
+- Keep retrying through long and repeated audio-device disconnections.
+- Allow available zones to start while another soundcard is disconnected.
+
 ## 0.1.0
 
 First release.

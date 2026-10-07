@@ -3,6 +3,7 @@
 
 readonly SENDSPIN_RUN_DIR=/run/sendspin-cli
 readonly SENDSPIN_PLAYERS_FILE=/run/sendspin-cli/players.json
+readonly SENDSPIN_SELECTORS_FILE=/run/sendspin-cli/selectors.json
 readonly SENDSPIN_DAEMON_DECISION=/run/sendspin-cli/bundled-daemons
 readonly SYSTEM_BUS_SOCKET=/var/run/dbus/system_bus_socket
 readonly AVAHI_SOCKET=/run/avahi-daemon/socket
@@ -47,7 +48,7 @@ sendspin::configured_players() {
         <<< "${SENDSPIN_ZONES}"
 }
 
-# Publish only after every player and hardware route has been validated.
+# Publish validated selectors and fixed player outputs before starting services.
 sendspin::prepare_players() {
     local temporary resolved
 
@@ -66,25 +67,17 @@ sendspin::prepare_players() {
         return 1
     fi
 
-    # A previous container may have stopped before releasing its host remaps.
-    if ! python3 "${BASH_SOURCE[0]%/*}/audio_routes.py" cleanup; then
-        rm -f "${temporary}"
+    # Keep the validated selectors for hotplug recovery; players use fixed outputs.
+    resolved=$(mktemp "${SENDSPIN_RUN_DIR}/players.XXXXXX") || { rm -f "${temporary}"; return 1; }
+    if ! python3 "${BASH_SOURCE[0]%/*}/audio_routes.py" prepare "${temporary}" > "${resolved}"; then
+        rm -f "${temporary}" "${resolved}"
         return 1
     fi
-
-    if jq -e 'any(.[]; has("device"))' "${temporary}" > /dev/null; then
-        resolved=$(mktemp "${SENDSPIN_RUN_DIR}/players.XXXXXX") || { rm -f "${temporary}"; return 1; }
-        if ! python3 "${BASH_SOURCE[0]%/*}/audio_routes.py" resolve "${temporary}" > "${resolved}"; then
-            rm -f "${temporary}" "${resolved}"
-            return 1
-        fi
+    if ! chmod 600 "${temporary}" "${resolved}" \
+        || ! mv -f "${temporary}" "${SENDSPIN_SELECTORS_FILE}" \
+        || ! mv -f "${resolved}" "${SENDSPIN_PLAYERS_FILE}"; then
         rm -f "${temporary}"
-        temporary=${resolved}
-    fi
-
-    if ! chmod 600 "${temporary}" \
-        || ! mv -f "${temporary}" "${SENDSPIN_PLAYERS_FILE}"; then
-        rm -f "${temporary}"
+        rm -f "${resolved}"
         return 1
     fi
 }

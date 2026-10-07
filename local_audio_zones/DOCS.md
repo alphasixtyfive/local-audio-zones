@@ -41,7 +41,7 @@ selected card's available channels. Both standard and custom selections are
 validated against that list; the native form's standard choices do not change
 with the selected card. Zones cannot share physical channels.
 
-The app reuses matching stereo outputs or creates standard PulseAudio remaps.
+The app creates a named PulseAudio stereo output for each device-selected zone.
 It preserves hardware profiles, rates and output levels, and removes only
 remaps it created when stopping. CENTER/SUB requires hardware that outputs both
 channels at full range. A headphone socket may share FRONT rather than provide
@@ -94,7 +94,12 @@ starting. The Log tab names the selected soundcard, available channels and
 each zone's resolved output. Invalid settings include the zone name and what
 needs changing.
 
-Health checks cover every player and the discovery services. If configured,
+Disconnected soundcards wait for the host to detect them again. The app restores
+their zone outputs and the native player retries the same output. Other zones
+keep running. Use stable device selections and reconnect cards to the same
+physical ports. The host must have native device detection enabled.
+
+Health checks cover every player, audio-route service and discovery services. If configured,
 they also check the USB trigger service. An unplugged optional relay is
 retried without restarting the audio players. Health does not verify cables,
 amplifier power or audible sound.
