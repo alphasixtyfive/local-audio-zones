@@ -94,6 +94,11 @@ guest_socket=$(docker exec "$CONTAINER" cat /data/zones/guest/state/socket-path)
 [ "$guest_socket" = /run/sendspin-cli/zones/guest/control.sock ]
 printf '  ok   state and control paths belong to their zones\n'
 
+# Player startup can precede the route worker's first status publication.
+for ((attempt=0; attempt<100; attempt++)); do
+    if docker exec "$CONTAINER" /usr/bin/container-healthcheck > /dev/null 2>&1; then break; fi
+    sleep 0.1
+done
 docker exec "$CONTAINER" /usr/bin/container-healthcheck
 docker exec "$CONTAINER" rm "$guest_socket"
 if docker exec "$CONTAINER" /usr/bin/container-healthcheck > "$WORK/health.log" 2>&1; then
