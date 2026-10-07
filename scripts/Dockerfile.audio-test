@@ -1,0 +1,7 @@
+ARG PLAYER_IMAGE
+FROM ${PLAYER_IMAGE}
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 pulseaudio pulseaudio-utils \
+    && rm -rf /var/lib/apt/lists/*
+ENV PYTHONDONTWRITEBYTECODE=1
+ENTRYPOINT ["python3"]

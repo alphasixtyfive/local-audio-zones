@@ -1,0 +1,67 @@
+diff --git a/src/sink_recovery.cpp b/src/sink_recovery.cpp
+index 93234bb..2239738 100644
+--- a/src/sink_recovery.cpp
++++ b/src/sink_recovery.cpp
+@@ -52,7 +52,9 @@ bool SinkRecovery::rescan_due(int64_t now_ms) {
+         }
+     }
+     this->rescan_immediate_ = false;
+-    ++this->rescan_attempts_;
++    if (this->rescan_attempts_ < SINK_RESCAN_BACKOFF_STEPS) {
++        ++this->rescan_attempts_;
++    }
+     this->rescan_in_flight_ = true;
+     // In flight: nothing more is owed until rescan_done() reports.
+     this->rescan_owed_.store(false, std::memory_order_relaxed);
+@@ -70,12 +72,7 @@ void SinkRecovery::rescan_done(bool recovered) {
+         this->refill_();
+         return;
+     }
+-    if (this->rescan_attempts_ >= SINK_RESCAN_ATTEMPTS) {
+-        this->rescan_spent_ = true;
+-        this->rescan_owed_.store(false, std::memory_order_relaxed);
+-        return;
+-    }
+-    // Owe another; the next tick stamps a longer deadline.
++    // Retry until the device returns, with a capped delay.
+     this->rescan_at_ms_ = NOT_STAMPED;
+     this->rescan_owed_.store(true, std::memory_order_relaxed);
+ }
+@@ -162,7 +159,7 @@ void OutageGapHandoff::forget() {
+ 
+ int64_t SinkRecovery::delay_for_(int attempts_made) {
+     int64_t delay = SINK_RESCAN_DELAY_MS;
+-    // Doubled in a loop rather than shifted, so raising SINK_RESCAN_ATTEMPTS cannot overflow.
++    // Doubled in a loop rather than shifted, so raising SINK_RESCAN_BACKOFF_STEPS cannot overflow.
+     for (int i = 0; i < attempts_made && delay < SINK_RESCAN_MAX_DELAY_MS; ++i) {
+         delay *= 2;
+     }
+diff --git a/src/sink_recovery.h b/src/sink_recovery.h
+index 3129e4d..b820278 100644
+--- a/src/sink_recovery.h
++++ b/src/sink_recovery.h
+@@ -12,7 +12,7 @@
+ // See the License for the specific language governing permissions and
+ // limitations under the License.
+ 
+-/// When a sink whose device died mid-stream should try to get it back, and when to give up.
++/// Retry timing for a sink whose device died mid-stream.
+ 
+ #pragma once
+ 
+@@ -28,12 +28,11 @@ inline constexpr int64_t SINK_RESCAN_DELAY_MS = 2000;
+ /// Ceiling the doubling delay between retried rescans grows to.
+ inline constexpr int64_t SINK_RESCAN_MAX_DELAY_MS = 30000;
+ 
+-/// Rescan attempts allowed before the budget is refilled.
+-inline constexpr int SINK_RESCAN_ATTEMPTS = 5;
++/// Backoff steps before the retry delay reaches its ceiling.
++inline constexpr int SINK_RESCAN_BACKOFF_STEPS = 5;
+ 
+ /// Decides when a sink reopens a dead device in place and when it rescans or reconnects.
+-/// Budget: one reopen, then up to SINK_RESCAN_ATTEMPTS rescans. Only a recovered rescan or a newly
+-/// configured stream refills it; a recovered reopen leaves the next outage the rescans alone.
++/// One reopen, then rescans with capped backoff until recovery or cancellation.
+ /// Every method but pending() must be called under the lock that serialises the sink's stream.
+ class SinkRecovery {
+ public:

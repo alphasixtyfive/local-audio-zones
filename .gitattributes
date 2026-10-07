@@ -1,0 +1,2 @@
+* text=auto eol=lf
+local_audio_zones/patches/*.patch whitespace=-blank-at-eol

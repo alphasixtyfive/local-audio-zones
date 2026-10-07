@@ -1,0 +1,37 @@
+# Modified for Local Audio Zones; upstream attribution is in NOTICE.
+name: Local Audio Zones
+version: "0.1.0"
+slug: local_audio_zones
+url: https://github.com/alphasixtyfive/local-audio-zones
+image: ghcr.io/alphasixtyfive/local-audio-zones
+description: Music Assistant zones for separate soundcard outputs.
+arch:
+  - amd64
+  - aarch64
+stage: experimental
+# Advertise before Home Assistant and Music Assistant start.
+startup: services
+# s6-overlay owns process supervision.
+init: false
+# mDNS and inbound Sendspin connections use the host network.
+host_network: true
+# Use the Home Assistant OS PulseAudio server.
+audio: true
+options:
+  zones: []
+# Optional room values inherit app settings; unset app values use CLI defaults.
+schema:
+  log_level: list(debug|info|warning|error)?
+  server: str?
+  buffer_ms: int(10,2000)?
+  zones:
+    - name: str
+      device: device(subsystem=sound)?
+      channel_pair: list(Front left/right|Rear left/right|Side left/right|Centre/Subwoofer)?
+      channels: str?
+      id: str
+      output: str?
+      port: int(1024,65535)?
+      log_level: list(debug|info|warning|error)?
+      server: str?
+      buffer_ms: int(10,2000)?

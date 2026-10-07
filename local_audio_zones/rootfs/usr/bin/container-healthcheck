@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Bound the whole check, including child processes, within Docker's 10-second limit.
+if [ "${1:-}" != --check ]; then
+    exec timeout --kill-after=0.5 8 "$0" --check
+fi
+
+source /usr/lib/sendspin-cli/common.sh
+source /usr/lib/sendspin-cli/players.sh
+
+if [ "$(s6-svstat -o up "${SENDSPIN_RUN_DIR}/services/_audio-routes")" != true ]; then
+    sendspin::log 'The audio route recovery service is not running.'
+    exit 1
+fi
+status=$(cat "${SENDSPIN_RUN_DIR}/routes.json")
+now=$(python3 -c 'import time; print(time.monotonic())')
+if ! jq -e --argjson now "${now}" '
+    type == "object"
+    and (.checked_at | type == "number")
+    and .checked_at <= $now and ($now - .checked_at) <= 30
+    and (.errors | type == "object" and length == 0)
+    and (.waiting | type == "array")
+' <<< "${status}" > /dev/null; then
+    sendspin::log 'Audio route recovery has not recently validated the configured outputs.'
+    exit 1
+fi
+
+check_player() {
+    sendspin::player_paths "$1"
+    if ! timeout --kill-after=1 2 sendspin-cli status --control-socket "${player_control_socket}" > /dev/null; then
+        sendspin::log "Player $1 is not responding on its control socket."
+        return 1
+    fi
+}
+
+# Only a recently verified missing device may wait without a CLI.
+ids=$(jq -r --argjson routes "${status}" '
+    .[] | .id as $id | select($routes.waiting | index($id) == null) | .id
+' "${SENDSPIN_PLAYERS_FILE}")
+pids=()
+while IFS= read -r id; do
+    [ -n "${id}" ] || continue
+    check_player "${id}" &
+    pids+=("$!")
+done <<< "${ids}"
+failed=0
+for pid in "${pids[@]}"; do
+    wait "${pid}" || failed=1
+done
+[ "${failed}" -eq 0 ] || exit 1
+
+decision=$(sendspin::daemon_decision)
+if [ "${decision}" = yes ]; then
+    for service in dbus avahi; do
+        if [ "$(s6-svstat -o up "/run/service/${service}")" != true ]; then
+            sendspin::log "The bundled ${service} service is not running."
+            exit 1
+        fi
+    done
+fi

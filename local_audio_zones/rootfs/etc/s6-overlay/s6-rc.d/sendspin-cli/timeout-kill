@@ -1,0 +1,2 @@
+4500
+# Rooms and workers stop concurrently; the route worker has 4000ms to save ownership.

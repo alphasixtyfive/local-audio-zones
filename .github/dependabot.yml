@@ -1,0 +1,14 @@
+# github-actions is the one ecosystem Dependabot can follow here: `uses:` lines
+# pinned to a commit SHA move together with their trailing version comment.
+#
+# Three pins stay manual on purpose, not by omission, each for a reason
+# recorded where the pin itself lives: the Dockerfile's SENDSPIN_CLI_REF and
+# SENDSPIN_CLI_SHA pair, the two architecture base stages in local_audio_zones/Dockerfile
+# and both workflows, and the actionlint image digest inside a `run:` script.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
