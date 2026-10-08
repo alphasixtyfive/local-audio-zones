@@ -33,7 +33,7 @@ configuration:
         description: Inherits the app log level when omitted.
       server:
         name: Music Assistant server
-        description: Inherits the app setting. Empty restores discovery; a host:port or ws:// URL connects directly. URL credentials are not supported.
+        description: Inherits the app setting. Empty restores discovery; a host:port or ws:// URL connects directly. Embedded credentials are not supported.
       buffer_ms:
         name: Audio buffer
         description: Inherits the app setting; leave unset unless needed, 10 to 2000 ms.
@@ -44,7 +44,7 @@ configuration:
     name: Music Assistant server
     description: >-
       Leave unset for discovery. Use mdns:<name> to select a discovered server,
-      or a host:port or ws:// URL to connect directly. URL credentials are not supported.
+      or a host:port or ws:// URL to connect directly. Embedded credentials are not supported.
   buffer_ms:
     name: Audio buffer
     description: >-

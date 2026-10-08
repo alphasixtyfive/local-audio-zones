@@ -146,7 +146,8 @@ for invalid in \
     '{"zones":[{"id":"study","name":"Study","output":"null","port":80}]}' \
     '{"zones":[{"id":"study","name":"Study","device":"/dev/snd/pcmC9999D0c"}]}' \
     '{"zones":[{"id":"study","name":"Study","output":"null"}],"server":"ws://user:s3cr3t@192.0.2.1:8927"}' \
-    '{"zones":[{"id":"study","name":"Study","output":"null","server":"wss://s3cr3t@music.example/sendspin"}]}'; do
+    '{"zones":[{"id":"study","name":"Study","output":"null","server":"wss://s3cr3t@music.example/sendspin"}]}' \
+    '{"zones":[{"id":"study","name":"Study","output":"null","server":"s3cr3t@music.local"}]}'; do
     start "$invalid"
     exit_code=$(timeout 20 docker wait "$PLAYER")
     [ "$exit_code" -ne 0 ] || fail 'invalid configuration exited successfully'
@@ -179,7 +180,7 @@ stop_cleanly
 pass 'direct server mode uses native parsing and keeps invalid credentials out of logs'
 
 stream_lifecycle() {
-    local confined=$1 server marker_directory attempt status
+    local confined=$1 server marker_directory attempt status protected
     start '{"zones":[{"id":"study","name":"Study","output":"null"}]}' "$confined"
     wait_healthy
     wait_log 'listening on port 8928'
@@ -210,6 +211,15 @@ stream_lifecycle() {
         sleep 0.05
     done
     grep -Fx 'stream: idle' <<< "$status" > /dev/null || fail 'player did not return to idle'
+    if [ "$confined" = true ]; then
+        for protected in /run/sendspin-cli/selectors.json /run/sendspin-cli/routes.json /run/sendspin-cli/zones/study/config; do
+            if docker exec "$PLAYER" sendspin-cli --logfile "$protected" --output invalid:test --no-mdns --no-control > "$WORK/write-denied.log" 2>&1; then
+                fail "player wrote to protected file $protected"
+            fi
+            grep -F 'cannot open logfile' "$WORK/write-denied.log" > /dev/null || fail "player could open protected file $protected"
+        done
+        pass 'the player cannot rewrite routing records or its configuration'
+    fi
     stop_cleanly
 }
 stream_lifecycle false

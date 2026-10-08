@@ -132,10 +132,10 @@ jobs:
             sudo apt-get install --yes --no-install-recommends apparmor
           fi
 
-      - name: Smoke test the native app
+      - name: Test the native runtime
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
-        run: scripts/smoke_test.sh "$REPO@$DIGEST" --require-apparmor
+        run: scripts/test_image.sh "$REPO@$DIGEST"
 
       - name: Record the digest for the manifest job
         env:

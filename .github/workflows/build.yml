@@ -1,6 +1,7 @@
 name: Build
 on:
   push:
+    branches: ['**']
   pull_request:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -44,6 +45,8 @@ jobs:
         run: sudo bash scripts/multi_zone_test.sh
       - name: Test changelog selection
         run: scripts/release_notes_test.sh
+      - name: Test Sendspin update tracking
+        run: python3 scripts/check_sendspin_test.py
   addon-lint:
     name: add-on manifest
     runs-on: ubuntu-24.04
@@ -84,7 +87,11 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Build the image
-        run: docker build --build-arg "BUILD_ARCH=${{ matrix.arch }}" --tag "$IMAGE" local_audio_zones
+        run: |
+          version=$(sed -nE 's/^version:[[:space:]]*"?([0-9]+\.[0-9]+\.[0-9]+)"?[[:space:]]*$/\1/p' local_audio_zones/config.yaml)
+          [ -n "$version" ]
+          docker build --build-arg "BUILD_ARCH=${{ matrix.arch }}" \
+            --build-arg "BUILD_VERSION=$version" --tag "$IMAGE" local_audio_zones
 
       - name: Check dependency notices in the image
         run: |
@@ -109,21 +116,5 @@ jobs:
             sudo apt-get update
             sudo apt-get install --yes --no-install-recommends apparmor
           fi
-      - name: Smoke test the native app
-        run: scripts/smoke_test.sh "$IMAGE" --require-apparmor
-
-      - name: Test independent zone recovery and shutdown
-        run: scripts/multi_zone_supervision_test.sh "$IMAGE"
-
-      - name: Test native device and channel routing
-        run: |
-          docker run --rm --network none --entrypoint python3 \
-            --env PYTHONDONTWRITEBYTECODE=1 --volume "$PWD:/repo:ro" \
-            "$IMAGE" /repo/scripts/audio_routing_test.py
-
-      - name: Test named PulseAudio output isolation
-        run: |
-          docker build --build-arg PLAYER_IMAGE="$IMAGE" \
-            --file scripts/Dockerfile.audio-test --tag local-audio-audio-test scripts
-          docker run --rm --network none --volume "$PWD:/repo:ro" \
-            local-audio-audio-test /repo/scripts/pulse_isolation_test.py
+      - name: Test the native runtime
+        run: scripts/test_image.sh "$IMAGE"

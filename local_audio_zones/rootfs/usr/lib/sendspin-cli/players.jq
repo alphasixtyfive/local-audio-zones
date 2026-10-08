@@ -23,8 +23,8 @@ def buffer_value($label):
 
 def server_value($label):
     text_value($label)
-    | if test("^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@") then
-        error($label + " must not contain URL credentials")
+    | if (startswith("mdns:") | not) and test("^([A-Za-z][A-Za-z0-9+.-]*://)?[^/?#]*@") then
+        error($label + " must not contain embedded credentials")
       else . end;
 
 def pair_value($label):

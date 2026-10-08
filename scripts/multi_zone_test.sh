@@ -170,7 +170,7 @@ for field in name output server; do
     for control in '\n' '\r' '\t' '\u0000' '\u001b'; do reject_zone "$field containing $control" "\"$field\":\"x${control}server = injected\""; done
 done
 for field in log_level server buffer_ms; do reject_zone "null room $field" "\"$field\":null"; done
-for server in 'ws://user:secret@192.0.2.1:8927' 'wss://secret@music.example/sendspin'; do
+for server in 'ws://user:secret@192.0.2.1:8927' 'wss://secret@music.example/sendspin' 'secret@music.local' 'user:secret@music.local:8927'; do
     reject 'URL credentials in zone server' "$(jq -cn --arg server "$server" '{zones:[{id:"study",name:"Study",output:"null",server:$server}]}')"
     reject 'URL credentials in shared server' "$(jq -cn --argjson zones "$ZONES" --arg server "$server" '{zones:$zones,server:$server}')"
     if grep -F 'secret' "$WORK/stderr" > /dev/null; then
