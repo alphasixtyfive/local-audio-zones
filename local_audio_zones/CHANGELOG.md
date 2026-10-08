@@ -2,6 +2,8 @@
 
 ## 0.1.1
 
+- Run the same image outside Home Assistant with Docker Compose.
+
 - Restrict player writes to control sockets and saved state.
 - Reject embedded credentials in bare server addresses.
 - Require full runtime checks before publishing images and track native-player releases.

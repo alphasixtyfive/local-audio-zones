@@ -16,6 +16,7 @@ trap 'docker image rm "$AUDIO_IMAGE" > /dev/null 2>&1 || true' EXIT
 
 "$SCRIPT_DIR/smoke_test.sh" "$IMAGE" --require-apparmor
 "$SCRIPT_DIR/multi_zone_supervision_test.sh" "$IMAGE"
+"$SCRIPT_DIR/compose_test.sh" "$IMAGE"
 
 docker run --rm --network none --entrypoint python3 \
     --env PYTHONDONTWRITEBYTECODE=1 --volume "$REPOSITORY:/repo:ro" \

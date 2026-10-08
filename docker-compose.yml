@@ -1,0 +1,38 @@
+services:
+  local-audio-zones:
+    image: ghcr.io/alphasixtyfive/local-audio-zones:${LOCAL_AUDIO_ZONES_VERSION:-0.1.1}
+    restart: unless-stopped
+    network_mode: host
+    device_cgroup_rules:
+      - 'c 116:* rwm'
+    environment:
+      PULSE_SERVER: unix:/run/audio/native
+      PULSE_COOKIE: /run/pulse-cookie
+    volumes:
+      - local-audio-zones-data:/data
+      - type: bind
+        source: ./options.json
+        target: /data/options.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /dev/snd
+        target: /dev/snd
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PULSE_RUNTIME_DIR:?Set PULSE_RUNTIME_DIR in .env}
+        target: /run/audio
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PULSE_COOKIE_FILE:?Set PULSE_COOKIE_FILE in .env}
+        target: /run/pulse-cookie
+        read_only: true
+        bind:
+          create_host_path: false
+
+volumes:
+  local-audio-zones-data:

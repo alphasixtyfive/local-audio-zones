@@ -1,0 +1,16 @@
+{
+  "zones": [
+    {
+      "id": "sendspin-living-room",
+      "name": "Living room",
+      "device": "/dev/snd/by-id/usb-your-soundcard",
+      "channel_pair": "Front left/right"
+    },
+    {
+      "id": "sendspin-kitchen",
+      "name": "Kitchen",
+      "device": "/dev/snd/by-id/usb-your-soundcard",
+      "channel_pair": "Rear left/right"
+    }
+  ]
+}

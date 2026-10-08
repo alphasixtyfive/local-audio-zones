@@ -21,6 +21,9 @@ The app is experimental; test your physical outputs before relying on them.
 See the [setup guide](local_audio_zones/DOCS.md) and
 [hardware notes](docs/audio-hardware-support.md).
 
+For a Linux Docker host, follow the [Docker Compose guide](docs/docker.md).
+It uses the same image and settings; multichannel routing needs host PulseAudio.
+
 ## Development
 
 ```sh
