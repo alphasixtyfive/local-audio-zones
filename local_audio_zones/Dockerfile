@@ -3,6 +3,7 @@
 # Bump both ARGs together; the SHA check rejects a repointed tag.
 ARG SENDSPIN_CLI_REF=v0.3.0
 ARG SENDSPIN_CLI_SHA=bc0551c6f0c29ee1a773c4ea730bb20b71992a8a
+ARG SENDSPIN_CORE_SHA=9331ace6428979982c934384702d289958ca125e
 
 # Supervisor and CI pass BUILD_ARCH; plain Docker builds default to amd64.
 ARG BUILD_ARCH=amd64
@@ -17,6 +18,7 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ARG SENDSPIN_CLI_REF
 ARG SENDSPIN_CLI_SHA
+ARG SENDSPIN_CORE_SHA
 
 # Use native ALSA, PulseAudio and PipeWire backends without PortAudio.
 RUN apt-get update \
@@ -63,7 +65,8 @@ RUN cmake -B build \
         -DSENDSPIN_CLI_BUILD_TESTS=OFF \
         | tee configure.log \
     && grep -qE '^-- sendspin-cli audio backends: null, stdout, alsa, pulse, pipewire$' configure.log \
-    && grep -qE '^-- sendspin-cli mDNS: dns_sd \(.*libdns_sd\.so.*\)$' configure.log
+    && grep -qE '^-- sendspin-cli mDNS: dns_sd \(.*libdns_sd\.so.*\)$' configure.log \
+    && test "$(git -C build/_deps/sendspin-src rev-parse HEAD)" = "${SENDSPIN_CORE_SHA}"
 
 RUN cmake --build build -j"$(nproc)"
 
@@ -76,6 +79,7 @@ RUN core_tag="$(sed -n 's/^set(SENDSPIN_GIT_TAG "\([^"]*\)".*/\1/p' CMakeLists.t
     && printf 'SENDSPIN_CLI_REF=%s\nSENDSPIN_CLI_SHA=%s\nSENDSPIN_GIT_TAG=%s\n' \
         "${SENDSPIN_CLI_REF}" "${SENDSPIN_CLI_SHA}" "${core_tag}" \
         > /build-info.txt \
+    && printf 'SENDSPIN_CORE_SHA=%s\n' "${SENDSPIN_CORE_SHA}" >> /build-info.txt \
     && sha256sum /tmp/pulse-pin-named-output.patch /tmp/sink-recovery.patch >> /build-info.txt
 
 
@@ -86,7 +90,7 @@ FROM ghcr.io/home-assistant/aarch64-base-debian@sha256:acc61c0ab60cbca176ec0fe4d
 FROM base-${BUILD_ARCH}
 
 ARG BUILD_ARCH
-ARG BUILD_VERSION=0.1.0
+ARG BUILD_VERSION=0.1.1
 
 LABEL \
     org.opencontainers.image.source="https://github.com/alphasixtyfive/local-audio-zones" \

@@ -1,6 +1,6 @@
 # Modified for Local Audio Zones; upstream attribution is in NOTICE.
 name: Local Audio Zones
-version: "0.1.0"
+version: "0.1.1"
 slug: local_audio_zones
 url: https://github.com/alphasixtyfive/local-audio-zones
 image: ghcr.io/alphasixtyfive/local-audio-zones

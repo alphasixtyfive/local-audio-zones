@@ -21,6 +21,9 @@ The app is experimental; test your physical outputs before relying on them.
 See the [setup guide](local_audio_zones/DOCS.md) and
 [hardware notes](docs/audio-hardware-support.md).
 
+For a Linux Docker host, follow the [Docker Compose guide](docs/docker.md).
+It uses the same image and settings; multichannel routing needs host PulseAudio.
+
 ## Development
 
 ```sh
@@ -28,7 +31,9 @@ docker build -t local-audio-zones local_audio_zones
 scripts/smoke_test.sh local-audio-zones
 ```
 
-CI builds and checks amd64 and aarch64. To build locally on Home Assistant OS,
+CI builds and checks amd64 and aarch64. A weekly GitHub workflow reports new
+stable Sendspin CLI releases as update issues; native upgrades require review.
+Dependabot tracks GitHub Actions. To build locally on Home Assistant OS,
 copy `local_audio_zones/` to `/addons/local_audio_zones/`, remove `image` from
 that copy's `config.yaml` and reload the app store.
 

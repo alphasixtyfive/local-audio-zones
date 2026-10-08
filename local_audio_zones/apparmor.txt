@@ -106,7 +106,9 @@ profile local_audio_zones flags=(attach_disconnected,mediate_deleted) {
     owner /root/.config/pulse/ w,
     owner /root/.config/pulse/** rwk,
 
-    /run/sendspin-cli/** rwk,
+    /run/sendspin-cli/zones/*/ r,
+    /run/sendspin-cli/zones/*/config r,
+    /run/sendspin-cli/zones/*/control.sock{,.lock} rwk,
     /data/zones/** rw,
 
     /usr/lib/**/alsa-lib/*.so mr,

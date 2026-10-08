@@ -112,7 +112,7 @@ sendspin::redact_server() {
 
 # Diagnostics never change the host's levels or selected ports.
 sendspin::pactl() {
-    LC_ALL=C PULSE_SERVER="unix:${PULSE_SOCKET}" timeout 3 pactl "$@" 2> /dev/null
+    LC_ALL=C PULSE_SERVER="${PULSE_SERVER:-unix:${PULSE_SOCKET}}" timeout 3 pactl "$@" 2> /dev/null
 }
 
 sendspin::report_on_sinks() {
@@ -164,7 +164,9 @@ sendspin::report_on_sinks() {
 
 sendspin::check_output_is_audible() {
     local sinks zone name target
-    [ -S "${PULSE_SOCKET}" ] || return 0
+    if [ -z "${PULSE_SERVER:-}" ] && [ ! -S "${PULSE_SOCKET}" ]; then
+        return 0
+    fi
     sinks=$(sendspin::pactl --format=json list sinks) || return 0
     while IFS= read -r zone; do
         name=$(jq -r '.name' <<< "${zone}") || return 0

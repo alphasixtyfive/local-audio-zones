@@ -98,4 +98,17 @@ for mutation in 'del(.[1].volume)' '.[1].volume = {}' '.[1].volume["front-left"]
 done
 out=$(sendspin::report_on_sinks '' '{}' 2>&1)
 [ -z "$out" ]
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT
+cat > "$WORK/pactl" <<'PACTL'
+#!/usr/bin/env bash
+printf '%s\n' "$PULSE_SERVER"
+PACTL
+chmod +x "$WORK/pactl"
+export PATH="$WORK:$PATH"
+unset PULSE_SERVER
+check 'diagnostics default to the Supervisor socket' "$(sendspin::pactl info)" 'unix:/run/audio/pulse.sock'
+export PULSE_SERVER=unix:/run/audio/native
+check 'diagnostics use the configured standalone server' "$(sendspin::pactl info)" "$PULSE_SERVER"
+unset PULSE_SERVER
 printf '  ok   no target needs no diagnostic\n\n%d diagnostic checks passed\n' "$CHECKS"
