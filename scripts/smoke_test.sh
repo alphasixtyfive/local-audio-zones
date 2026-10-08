@@ -213,10 +213,10 @@ stream_lifecycle() {
     grep -Fx 'stream: idle' <<< "$status" > /dev/null || fail 'player did not return to idle'
     if [ "$confined" = true ]; then
         for protected in /run/sendspin-cli/selectors.json /run/sendspin-cli/routes.json /run/sendspin-cli/zones/study/config; do
-            if docker exec "$PLAYER" sendspin-cli --logfile "$protected" --output invalid:test --no-mdns --no-control > "$WORK/write-denied.log" 2>&1; then
+            if docker exec "$PLAYER" /bin/bash -c 'exec sendspin-cli --logfile "$1" --output invalid:test --no-mdns --no-control' bash "$protected" > "$WORK/write-denied.log" 2>&1; then
                 fail "player wrote to protected file $protected"
             fi
-            grep -F 'cannot open logfile' "$WORK/write-denied.log" > /dev/null || fail "player could open protected file $protected"
+            grep -F 'cannot open logfile' "$WORK/write-denied.log" > /dev/null || { cat "$WORK/write-denied.log" >&2; fail "player could open protected file $protected"; }
         done
         pass 'the player cannot rewrite routing records or its configuration'
     fi
